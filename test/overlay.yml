@@ -1,0 +1,15 @@
+# Local verification overlay — dev path only.
+#
+# Inserts this checkout as a bundle layer by absolute path so the plugin can be
+# booted without publishing it or running `dsh plugin add` (which shells out to
+# pnpm).
+#
+# NOTE the path points at the ENTRY FILE, not the package directory. A `--patch`
+# overlay with a bare directory becomes a raw ESM directory import, which Node
+# rejects without consulting package.json `main`/`exports`. The production path
+# is unaffected: `dsh plugin add` installs the package into the profile's
+# node_modules and the row in our own cordis.patch.yml references it by NAME,
+# which resolves through `exports` normally.
+- insert:
+    - id: shodh-memory
+      name: '/workspace/shodh-memory-dsh-integration/src/index.js'

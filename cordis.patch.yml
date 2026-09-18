@@ -1,0 +1,95 @@
+# dsh-shodh-memory — bundle patch layer.
+#
+# Applied over the profile's existing entry list when this package is added with
+# `dsh plugin add <this-package>`. Later layers (another bundle, or the user's
+# own `$DSH_HOME/cordis.patch.yml`) may retarget this row by `id` to override
+# any field below; a patch replaces the whole `config`, so restate every field
+# you keep.
+#
+# Every value here is a default. The plugin degrades to a no-op when the shodh
+# server is unreachable, so this row is safe to ship enabled.
+#
+# ── connection ───────────────────────────────────────────────────────────────
+#   baseUrl         shodh HTTP root. Override with SHODH_API_URL.
+#   apiKeyEnv       NAME of the env var holding the X-API-Key value.
+#                 shodh generates a local key on `shodh init`.
+#   userId          shodh tenant namespace. Override with SHODH_USER_ID.
+#   userIdScope     'global'  — one namespace for every project (default)
+#                 'workspace' — `dsh:<basename(cwd)>`, so each project keeps
+#                               its own memory. Recommended for coding use.
+#
+# ── resilience ───────────────────────────────────────────────────────────────
+#   requestTimeoutMs  default per-call budget.
+#   recallTimeoutMs   tighter budget for the inline auto-recall: it sits on the
+#                     critical path of a turn, so it must fail fast.
+#   captureTimeoutMs  background capture budget; never blocks a turn.
+#   failureThreshold  consecutive failures that trip the circuit breaker.
+#   failureCooldownMs how long the breaker stays open before a probe is allowed.
+#
+# ── model-facing tools ───────────────────────────────────────────────────────
+# Each toggle adds or removes ONE tool schema from every request. Three tools
+# cost roughly 350 tokens of standing context; shodh's own MCP surface exposes
+# 51 of them for ~7.5k. Turn off what you do not use.
+#
+# ── auto-recall ──────────────────────────────────────────────────────────────
+#   enabled         inject relevant memories at the start of each turn.
+#   maxChars        hard cap on the injected block. This is the main
+#                 token-cost control: 1200 chars ≈ 300 tokens.
+#   maxResults    ceiling on memories surfaced per turn.
+#   minPromptChars  skip recall for prompts too short to mean anything
+#                 ("ok", "continue", "hi").
+#   reuseGapTurns   a memory injected at turn N is not re-injected until
+#                 turn N+gap, so the same fact is not paid for twice while
+#                 it is still in context.
+#   queryChars    how much of the user's prompt is sent as the query.
+#
+# ── auto-capture ─────────────────────────────────────────────────────────────
+# Runs off session events. Costs the model zero tokens.
+#   userPrompts       store each human prompt.
+#   toolErrors        store failed tool calls as `Error` memories — the
+#                   highest-value automatic signal in a coding harness.
+#   assistantReplies store assistant output. Off: high volume, low signal.
+#   maxChars          per-memory cap before the write is skipped.
+#   minChars          prompts below this are noise; not stored.
+#
+# ── prompt section ───────────────────────────────────────────────────────────
+#   promptSection   add the short "how to use memory" system-prompt section.
+#                 ~140 tokens. Turning it off leaves the tools self-describing.
+
+- insert:
+    - id: shodh-memory
+      name: dsh-shodh-memory
+      config:
+        baseUrl: !!js process.env.SHODH_API_URL ?? 'http://127.0.0.1:3030'
+        apiKeyEnv: SHODH_API_KEY
+        userId: !!js process.env.SHODH_USER_ID ?? 'dsh'
+        userIdScope: global
+
+        requestTimeoutMs: 3000
+        recallTimeoutMs: 1500
+        captureTimeoutMs: 4000
+        failureThreshold: 3
+        failureCooldownMs: 30000
+
+        tools:
+          save: true
+          search: true
+          forget: true
+
+        autoRecall:
+          enabled: true
+          maxChars: 1200
+          maxResults: 5
+          minPromptChars: 12
+          reuseGapTurns: 8
+          queryChars: 500
+
+        autoCapture:
+          enabled: true
+          userPrompts: true
+          toolErrors: true
+          assistantReplies: false
+          maxChars: 900
+          minChars: 24
+
+        promptSection: true

@@ -1,0 +1,12 @@
+# Local test scaffolding — never published.
+node_modules/
+.dsh-home/
+.vendor-inspect/
+
+# Ad-hoc boot logs from harness verification runs.
+boot*.log
+load-marker.json
+
+# Editor / OS noise
+.DS_Store
+*.swp
