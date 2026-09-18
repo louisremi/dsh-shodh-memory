@@ -38,7 +38,7 @@ export function registerTools(ctx, { client, cfg, defineTool, resolveUserId }) {
 
   if (cfg.tools.save) add(buildSaveTool(defineTool, client, resolveUserId));
   if (cfg.tools.search) add(buildSearchTool(defineTool, client, resolveUserId));
-  if (cfg.tools.forget) add(buildForgetTool(defineTool, client));
+  if (cfg.tools.forget) add(buildForgetTool(defineTool, client, resolveUserId));
 
   return () => {
     for (const dispose of disposers) {
@@ -109,7 +109,7 @@ function buildSaveTool(defineTool, client, resolveUserId) {
           tags: args.tags,
           sessionId: exec.agent?.session?.id,
         },
-        { timeoutMs: 8000 },
+        { timeoutMs: 8000, userId: resolveUserId(exec.agent) },
       );
       return {
         saved: true,
@@ -177,12 +177,15 @@ function buildSearchTool(defineTool, client, resolveUserId) {
     },
     timeoutMs: 8000,
     isConcurrencySafe: () => true,
-    async execute(args) {
+    async execute(args, exec) {
       const query = typeof args.query === 'string' ? args.query.trim() : '';
       if (!query) throw new Error('memory_search: `query` must be a non-empty string');
       const limit = Math.min(20, Math.max(1, Number(args.limit ?? 5) || 5));
 
-      const response = await client.recall({ query, limit, mode: 'semantic' }, { timeoutMs: 8000 });
+      const response = await client.recall(
+        { query, limit, mode: 'semantic' },
+        { timeoutMs: 8000, userId: resolveUserId(exec?.agent) },
+      );
       const results = (response?.memories ?? [])
         .map(normalizeMemory)
         .filter(Boolean)
@@ -211,7 +214,7 @@ function buildSearchTool(defineTool, client, resolveUserId) {
  * @param client - the shodh client.
  * @returns the tool definition.
  */
-function buildForgetTool(defineTool, client) {
+function buildForgetTool(defineTool, client, resolveUserId) {
   return defineTool({
     name: 'memory_forget',
     description:
@@ -239,10 +242,10 @@ function buildForgetTool(defineTool, client) {
       ],
     },
     timeoutMs: 8000,
-    async execute(args) {
+    async execute(args, exec) {
       const id = typeof args.id === 'string' ? args.id.trim() : '';
       if (!id) throw new Error('memory_forget: `id` must be a non-empty string');
-      await client.forget(id, { timeoutMs: 8000 });
+      await client.forget(id, { timeoutMs: 8000, userId: resolveUserId(exec?.agent) });
       return { forgotten: true, id };
     },
     presentCall: (args) => ({

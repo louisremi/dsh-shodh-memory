@@ -316,6 +316,21 @@ for (const tool of registeredTools) {
 }
 check('all tool output schemas are plain JSON Schema', true);
 
+console.log('\n[12] tenant override reaches the wire');
+failNext = 0;
+const { ShodhClient } = await import('../src/client.js');
+const scoped = new ShodhClient({
+  baseUrl, apiKey: 'scoped-key', userId: 'dsh:default-project',
+  requestTimeoutMs: 2000, failureThreshold: 3, failureCooldownMs: 1000,
+});
+await scoped.remember({ content: 'Tenant check A.' }, {});
+await scoped.remember({ content: 'Tenant check B.' }, { userId: 'dsh:other-project' });
+const tenantA = received.find((r) => r.url === '/api/remember' && r.body?.content === 'Tenant check A.');
+const tenantB = received.find((r) => r.url === '/api/remember' && r.body?.content === 'Tenant check B.');
+check('default tenant used when no override', tenantA?.body?.user_id === 'dsh:default-project');
+check('per-call override wins', tenantB?.body?.user_id === 'dsh:other-project');
+check('uid() falls back to the process default', scoped.uid(undefined) === 'dsh:default-project');
+
 console.log(`\n${passed} checks passed.\n`);
 
 await ctx.fiber.dispose();

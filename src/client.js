@@ -61,6 +61,22 @@ export class ShodhClient {
   }
 
   /**
+   * The tenant a call belongs to.
+   *
+   * `this.userId` is the process default — already workspace-scoped when
+   * `userIdScope: 'workspace'`. A caller holding an agent may pass a more
+   * specific tenant via `options.userId`; without one every call still lands in
+   * the right namespace, which is what makes per-workspace memory work for
+   * event-driven capture, where no agent is attached to the event.
+   *
+   * @param options - the call options, possibly carrying `userId`.
+   * @returns the tenant id to send.
+   */
+  uid(options) {
+    return options?.userId ?? this.userId;
+  }
+
+  /**
    * One REST call. Resolves the parsed JSON body or throws {@link ShodhError}.
    *
    * @param path - API path beginning with `/`, e.g. `/api/recall`.
@@ -193,7 +209,7 @@ export class ShodhClient {
    */
   remember({ content, memoryType = 'Conversation', tags, sessionId }, options) {
     return this.call('/api/remember', {
-      user_id: this.userId,
+      user_id: this.uid(options),
       content,
       memory_type: memoryType,
       ...(tags && tags.length > 0 ? { tags } : {}),
@@ -214,7 +230,7 @@ export class ShodhClient {
    */
   recall({ query, limit = 5, mode = 'semantic', sessionId }, options) {
     return this.call('/api/recall', {
-      user_id: this.userId,
+      user_id: this.uid(options),
       query,
       limit,
       mode,
@@ -233,7 +249,7 @@ export class ShodhClient {
    */
   proactiveContext({ context, maxResults = 5 }, options) {
     return this.call('/api/proactive_context', {
-      user_id: this.userId,
+      user_id: this.uid(options),
       context,
       max_results: maxResults,
     }, options);
@@ -247,7 +263,7 @@ export class ShodhClient {
    */
   contextSummary(maxItems = 5, options) {
     return this.call('/api/context_summary', {
-      user_id: this.userId,
+      user_id: this.uid(options),
       include_decisions: true,
       include_learnings: true,
       include_context: true,
@@ -262,7 +278,7 @@ export class ShodhClient {
    * @returns the delete response.
    */
   forget(id, options) {
-    return this.call(`/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(this.userId)}`, undefined, {
+    return this.call(`/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(this.uid(options))}`, undefined, {
       method: 'DELETE',
       ...options,
     });
@@ -283,7 +299,7 @@ export class ShodhClient {
    * @returns the stats payload.
    */
   stats(options) {
-    return this.call(`/api/users/${encodeURIComponent(this.userId)}/stats`, undefined, { method: 'GET', ...options });
+    return this.call(`/api/users/${encodeURIComponent(this.uid(options))}/stats`, undefined, { method: 'GET', ...options });
   }
 }
 

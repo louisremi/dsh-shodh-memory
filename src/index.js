@@ -87,7 +87,10 @@ export function apply(ctx, config) {
   const client = new ShodhClient({
     baseUrl: cfg.baseUrl,
     apiKey,
-    userId: cfg.userId,
+    // Resolved, not raw: under `userIdScope: 'workspace'` the process default is
+    // already the per-project tenant, so event-driven capture — which has no
+    // agent attached to the event — still lands in the right namespace.
+    userId: resolveUserId(undefined),
     requestTimeoutMs: cfg.requestTimeoutMs,
     failureThreshold: cfg.failureThreshold,
     failureCooldownMs: cfg.failureCooldownMs,
@@ -104,12 +107,12 @@ export function apply(ctx, config) {
    * @param agent - the agent making the call, if any.
    * @returns the tenant id.
    */
-  const resolveUserId = (agent) => {
+  function resolveUserId(agent) {
     if (cfg.userIdScope !== 'workspace') return cfg.userId;
     const cwd = agent?.workspaceCwd ?? agent?.workspace?.cwd ?? process.cwd();
     const label = basename(String(cwd)) || 'default';
     return `dsh:${label}`;
-  };
+  }
 
   /** Shared state: dedupe ledgers, scoped to this plugin fiber's lifetime. */
   const state = {

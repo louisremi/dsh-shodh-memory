@@ -132,7 +132,7 @@ src/
   tools.js         memory_save / memory_search / memory_forget
   commands.js      /shodh
 test/
-  smoke.mjs        41-check end-to-end test against a fake shodh
+  smoke.mjs        44-check end-to-end test against a fake shodh
   overlay.yml      dev overlay for booting inside a real harness
 ```
 

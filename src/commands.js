@@ -35,15 +35,15 @@ export function registerCommand(ctx, { client, cfg, state, resolveUserId }) {
         case 'status':
           return statusResult(client, cfg, state, userId);
         case 'save':
-          return saveResult(client, argument);
+          return saveResult(client, argument, userId);
         case 'search':
         case 'find':
-          return searchResult(client, argument);
+          return searchResult(client, argument, userId);
         case 'summary':
           return summaryResult(client);
         case 'forget':
         case 'delete':
-          return forgetResult(client, argument);
+          return forgetResult(client, argument, userId);
         case 'help':
         case '--help':
           return { kind: 'success', text: HELP };
@@ -114,10 +114,10 @@ async function statusResult(client, cfg, state, userId) {
  * @param argument - the memory text.
  * @returns the command result.
  */
-async function saveResult(client, argument) {
+async function saveResult(client, argument, userId) {
   if (!argument) return { kind: 'error', text: 'Usage: /shodh save <text>' };
   const result = await client.soft('/api/remember', {
-    user_id: client.userId,
+    user_id: userId,
     content: argument,
     memory_type: 'Decision',
     source_type: 'dsh-cli',
@@ -132,10 +132,10 @@ async function saveResult(client, argument) {
  * @param argument - the query.
  * @returns the command result.
  */
-async function searchResult(client, argument) {
+async function searchResult(client, argument, userId) {
   if (!argument) return { kind: 'error', text: 'Usage: /shodh search <query>' };
   const response = await client.soft('/api/recall', {
-    user_id: client.userId,
+    user_id: userId,
     query: argument,
     limit: 8,
     mode: 'semantic',
@@ -175,9 +175,9 @@ async function summaryResult(client) {
  * @param argument - the memory id.
  * @returns the command result.
  */
-async function forgetResult(client, argument) {
+async function forgetResult(client, argument, userId) {
   if (!argument) return { kind: 'error', text: 'Usage: /shodh forget <id>' };
-  const result = await client.soft(`/api/memory/${encodeURIComponent(argument)}?user_id=${encodeURIComponent(client.userId)}`, undefined, {
+  const result = await client.soft(`/api/memory/${encodeURIComponent(argument)}?user_id=${encodeURIComponent(userId)}`, undefined, {
     method: 'DELETE',
     timeoutMs: 8000,
   });
