@@ -72,11 +72,19 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
   /** Record a memory unless this exact content was already stored this process. */
   const store = ({ content, memoryType, tags, sessionId }) => {
     const text = content.trim();
-    if (text.length < opts.minChars) return;
+    if (text.length < opts.minChars) {
+      state.activity.captureSkipped += 1;
+      return;
+    }
     const capped = text.length > opts.maxChars ? `${text.slice(0, opts.maxChars - 1)}…` : text;
     const hash = sha1(capped);
-    if (state.capturedHashes.has(hash)) return;
+    if (state.capturedHashes.has(hash)) {
+      state.activity.captureSkipped += 1;
+      return;
+    }
     rememberHash(state, hash);
+    state.activity.captured += 1;
+    state.activity.lastCaptureAt = Date.now();
     enqueue(() =>
       client.remember(
         { content: capped, memoryType, tags, sessionId },

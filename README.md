@@ -52,7 +52,7 @@ DeepSeek Harness cheaply.
 ### Auto-recall
 
 At the first step of each turn, the user's prompt is sent to shodh's
-`/api/proactive_context` endpoint and the results come back as a compact block:
+`/api/recall` endpoint and the results come back as a compact block:
 
 ```
 Relevant memories (shodh):
@@ -60,6 +60,14 @@ Relevant memories (shodh):
 - [Error 74%] Sandbox denies writes outside the session workspace.
 - [Learning 55%] Auto-recall block is capped at 1200 chars.
 ```
+
+> **Why `/api/recall` and not `/api/proactive_context`.** The earlier design
+> used `proactive_context`, which reads like the right endpoint for this. It is
+> not: verified against a live shodh 0.2.0 server, `proactive_context` returns
+> the correct response *shape* but always zero memories — on that version it
+> surfaces reminders and todos, not stored memories. `/api/recall` is the
+> endpoint that actually returns ranked memories. If you bump the server and
+> auto-recall goes quiet, check this first.
 
 Three mechanisms keep this from becoming its own token problem:
 
@@ -440,7 +448,7 @@ src/
   client.js         REST over fetch, timeouts, circuit breaker
   format.js         text extraction, compact capped rendering
   capture.js        session events → /api/remember
-  recall.js         turn prompt → proactive_context → injected block
+  recall.js         turn prompt → /api/recall → injected block
   tools.js          memory_save / memory_search / memory_forget
   commands.js       /shodh
 test/

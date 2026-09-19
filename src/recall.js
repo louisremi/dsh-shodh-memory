@@ -67,16 +67,29 @@ export function installRecall(ctx, { client, cfg, state, createUserMessage, reso
     const query = toQueryText(prompt, opts.queryChars);
     if (query.length < opts.minPromptChars) return decision;
 
-    const response = await client.proactiveContext(
-      { context: query, maxResults: opts.maxResults + 4 },
-      { timeoutMs: opts.enabled ? cfg.recallTimeoutMs : undefined },
+    // /api/recall, not /api/proactive_context. Verified against a live shodh
+    // 0.2.0 server: proactive_context returns the correct response *shape* but
+    // always zero memories — on this version it surfaces reminders/todos, not
+    // stored memories. /api/recall is the endpoint that actually returns
+    // ranked memories (score 0.95 on an exact match). The response carries a
+    // `memories` array either way, so selectFresh() is unchanged.
+    const response = await client.recall(
+      { query, limit: opts.maxResults + 4 },
+      { timeoutMs: cfg.recallTimeoutMs },
     ).catch(() => undefined);
 
     if (payload.signal?.aborted) return decision;
 
     const fresh = selectFresh(payload.agent, response, state, opts, payload.turn);
     const block = renderRecallBlock(fresh, opts.maxChars);
-    if (!block) return decision;
+    if (!block) {
+      state.activity.recallEmpty += 1;
+      return decision;
+    }
+
+    state.activity.recalled += 1;
+    state.activity.lastInjectChars = block.length;
+    state.activity.lastInjectAt = Date.now();
 
     const message = createUserMessage({
       content: [{ type: 'text', text: block }],

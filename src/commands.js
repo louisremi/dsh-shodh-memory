@@ -63,7 +63,14 @@ const HELP = [
 ].join('\n');
 
 /**
- * Server and plugin health.
+ * Server and plugin health — the `/shodh status` dashboard.
+ *
+ * Rendered as four compact sections rather than a raw JSON dump: identity and
+ * circuit, the tiered store, the effective config, and this process's activity.
+ * Every field here is chosen to answer a question you actually ask when a memory
+ * feature misbehaves — "is it even reachable", "which tenant am I", "did it
+ * capture my last prompt", "how big is the injected block".
+ *
  * @param client - the shodh client.
  * @param cfg - normalized config.
  * @param state - shared plugin state.
@@ -71,41 +78,98 @@ const HELP = [
  * @returns the command result.
  */
 async function statusResult(client, cfg, state, userId) {
-  const lines = [`tenant: ${userId}`, `server: ${cfg.baseUrl}`];
-
   const health = await client.soft('/health', undefined, { method: 'GET', timeoutMs: 2000 });
-  lines.push(
-    health === undefined
-      ? 'status: UNREACHABLE (circuit may be open — memory features are inert until it recovers)'
-      : `status: ok ${JSON.stringify(health)}`,
-  );
+  const reachable = health !== undefined;
+  const version = reachable && typeof health.version === 'string' ? health.version : '?';
+  const dot = !reachable ? '○' : health.status === 'healthy' ? '●' : '◐';
+  const statusWord = !reachable ? 'unreachable' : health.status ?? 'unknown';
 
+  const lines = [
+    `shodh-memory  v${version}  ${dot} ${statusWord}`,
+    '─'.repeat(44),
+  ];
+
+  // ── identity & circuit ───────────────────────────────────────────────────
+  const scopeNote = cfg.userIdScope === 'workspace' ? 'workspace scope' : 'global scope';
+  lines.push(`tenant    ${userId}  (${scopeNote})`);
+  lines.push(`server    ${cfg.baseUrl}`);
   if (client.breakerOpen) {
-    lines.push(`circuit: OPEN, retry in ${Math.ceil((client.openUntil - Date.now()) / 1000)}s`);
+    lines.push(`circuit   OPEN · retry in ${Math.ceil((client.openUntil - Date.now()) / 1000)}s · memory features inert`);
   } else {
-    lines.push(`circuit: closed (${client.consecutiveFailures} consecutive failure(s))`);
+    lines.push(`circuit   closed · ${client.consecutiveFailures} consecutive failure(s)`);
   }
 
-  const stats = await client.soft(`/api/users/${encodeURIComponent(userId)}/stats`, undefined, {
-    method: 'GET',
-    timeoutMs: 3000,
-  });
-  if (stats !== undefined) {
-    lines.push(`store: ${compact(stats)}`);
+  // ── store ────────────────────────────────────────────────────────────────
+  if (reachable) {
+    const stats = await client.soft(`/api/users/${encodeURIComponent(userId)}/stats`, undefined, {
+      method: 'GET',
+      timeoutMs: 3000,
+    });
+    if (stats !== undefined) {
+      const total = stats.total_memories ?? 0;
+      const tiers = [
+        `working ${stats.working_memory_count ?? 0}`,
+        `session ${stats.session_memory_count ?? 0}`,
+        `long-term ${stats.long_term_memory_count ?? 0}`,
+      ].join(' · ');
+      lines.push('');
+      lines.push(`store     ${total} ${total === 1 ? 'memory' : 'memories'}   ${tiers}`);
+      const graph = `graph ${stats.graph_nodes ?? 0} nodes / ${stats.graph_edges ?? 0} edges`;
+      const vec = `vectors ${stats.vector_index_count ?? 0}`;
+      const imp = typeof stats.average_importance === 'number' ? ` · avg importance ${stats.average_importance.toFixed(2)}` : '';
+      lines.push(`          ${vec} · ${graph}${imp}`);
+    }
   }
 
+  // ── effective config ───────────────────────────────────────────────────────
+  lines.push('');
   lines.push(
-    `recall: ${cfg.autoRecall.enabled ? `on (≤${cfg.autoRecall.maxChars} chars, ${cfg.autoRecall.maxResults} memories/turn)` : 'off'}`,
+    `recall    ${cfg.autoRecall.enabled ? `on  ≤${cfg.autoRecall.maxChars} chars · ${cfg.autoRecall.maxResults}/turn · gap ${cfg.autoRecall.reuseGapTurns}` : 'off'}`,
   );
+  const captureParts = [
+    cfg.autoCapture.userPrompts && 'prompts',
+    cfg.autoCapture.toolErrors && 'tool errors',
+    cfg.autoCapture.assistantReplies && 'replies',
+  ].filter(Boolean).join(' + ');
+  lines.push(`capture   ${cfg.autoCapture.enabled ? `on  ${captureParts || '—'}` : 'off'}`);
+  const toolList = [
+    cfg.tools.save && 'memory_save',
+    cfg.tools.search && 'memory_search',
+    cfg.tools.forget && 'memory_forget',
+  ].filter(Boolean).join(' · ');
+  lines.push(`tools     ${toolList || 'none'}`);
+
+  // ── this process ─────────────────────────────────────────────────────────
+  const a = state.activity ?? {};
+  lines.push('');
+  const lastInject = a.lastInjectChars
+    ? ` · last inject ${a.lastInjectChars} chars ${ago(a.lastInjectAt)}`
+    : '';
+  const lastCapture = a.lastCaptureAt ? ` · last ${ago(a.lastCaptureAt)}` : '';
   lines.push(
-    `capture: ${cfg.autoCapture.enabled ? `on (${[cfg.autoCapture.userPrompts && 'prompts', cfg.autoCapture.toolErrors && 'tool errors', cfg.autoCapture.assistantReplies && 'replies'].filter(Boolean).join(', ')})` : 'off'}`,
+    `activity  ${a.captured ?? 0} captured${lastCapture} · ${a.recalled ?? 0} recalled${lastInject}`,
   );
-  lines.push(
-    `tools: ${[cfg.tools.save && 'memory_save', cfg.tools.search && 'memory_search', cfg.tools.forget && 'memory_forget'].filter(Boolean).join(', ') || 'none'}`,
-  );
-  lines.push(`captured this process: ${state.capturedHashes.size}`);
+  if ((a.captureSkipped ?? 0) > 0 || (a.recallEmpty ?? 0) > 0) {
+    lines.push(
+      `          ${a.captureSkipped ?? 0} capture skipped · ${a.recallEmpty ?? 0} empty recall`,
+    );
+  }
 
   return { kind: 'success', text: lines.join('\n') };
+}
+
+/**
+ * Render a timestamp as a short relative string ("3s ago", "5m ago").
+ * @param ts - epoch millis, or 0/undefined for "never".
+ * @returns the relative label, or 'never' when unset.
+ */
+function ago(ts) {
+  if (!ts) return 'never';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.round(m / 60)}h ago`;
 }
 
 /**
@@ -185,10 +249,3 @@ async function forgetResult(client, argument, userId) {
   return { kind: 'success', text: `Forgot ${argument}.` };
 }
 
-/** @returns a one-line rendering of an arbitrary stats object. */
-function compact(object) {
-  return Object.entries(object)
-    .filter(([, value]) => typeof value !== 'object' || value === null)
-    .map(([key, value]) => `${key}=${value}`)
-    .join(' ');
-}

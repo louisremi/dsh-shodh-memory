@@ -221,9 +221,9 @@ const decision = await ctx.events.waterfall(
   { agent: { session: { id: 'sess-1' } }, messages: [userMsg], turn: 1, step: 1, signal: new AbortController().signal },
   () => Promise.resolve({ kind: 'enter', messages: [userMsg] }),
 );
-const recallCalls = received.filter((r) => r.url === '/api/proactive_context');
-check('proactive_context was called', recallCalls.length >= 1);
-check('query derived from the prompt', recallCalls[0]?.body?.context?.includes('deployment fail'));
+const recallCalls = received.filter((r) => r.url === '/api/recall');
+check('recall endpoint was called', recallCalls.length >= 1);
+check('query derived from the prompt', recallCalls[0]?.body?.query?.includes('deployment fail'));
 check('decision still enters', decision.kind === 'enter');
 check('one message appended (the recall block)', decision.messages.length === 2);
 const injected = decision.messages[1];
@@ -273,8 +273,11 @@ console.log('\n[9] slash command');
 const command = registeredCommands.find((c) => c.name === 'shodh');
 const statusOut = await command.handler({ rawInput: 'status', agent: { session: { id: 's' } } });
 check('/shodh status succeeds', statusOut.kind === 'success');
-check('status reports tenant', statusOut.text.includes('tenant: dsh'));
-check('status reports circuit', statusOut.text.includes('circuit: closed'));
+check('status reports tenant', statusOut.text.includes('tenant    dsh'));
+check('status reports circuit', statusOut.text.includes('circuit   closed'));
+check('status reports version header', statusOut.text.startsWith('shodh-memory  v'));
+check('status reports effective recall config', statusOut.text.includes('recall    on'));
+check('status reports activity section', statusOut.text.includes('activity  '));
 const summaryOut = await command.handler({ rawInput: 'summary', agent: {} });
 check('/shodh summary lists decisions', summaryOut.text.includes('Decisions:'));
 const badOut = await command.handler({ rawInput: 'bogus', agent: {} });

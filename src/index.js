@@ -138,6 +138,19 @@ export function apply(ctx, config) {
   const state = {
     capturedHashes: new Set(),
     injectedTurns: new Map(),
+    // Session activity counters, surfaced by `/shodh status`. These are
+    // process-lifetime tallies (reset on reload), not persisted history — they
+    // answer "what has this running plugin actually done", which is what makes
+    // the dashboard useful when debugging a live deployment.
+    activity: {
+      captured: 0,
+      captureSkipped: 0,
+      recalled: 0,
+      recallEmpty: 0,
+      lastInjectChars: 0,
+      lastInjectAt: 0,
+      lastCaptureAt: 0,
+    },
   };
 
   if (cfg.promptSection) registerPromptSection(ctx, cfg);
