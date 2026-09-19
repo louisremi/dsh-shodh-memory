@@ -110,8 +110,28 @@ export function apply(ctx, config) {
   function resolveUserId(agent) {
     if (cfg.userIdScope !== 'workspace') return cfg.userId;
     const cwd = agent?.workspaceCwd ?? agent?.workspace?.cwd ?? process.cwd();
-    const label = basename(String(cwd)) || 'default';
-    return `dsh:${label}`;
+    const label = sanitizeTenant(basename(String(cwd)) || 'default');
+    return `dsh-${label}`;
+  }
+
+  /**
+   * Force a workspace basename into shodh's allowed tenant charset.
+   *
+   * shodh rejects a user_id containing anything outside
+   * `[A-Za-z0-9._@-]` with HTTP 400 INVALID_INPUT, and a directory name can
+   * easily carry a space or other punctuation. So collapse every disallowed
+   * run to a single hyphen and trim leading/trailing ones. The `dsh-` prefix
+   * (hyphen, not colon) keeps harness tenants distinguishable from other
+   * clients sharing the server while staying inside the allowed set.
+   *
+   * @param raw - the raw workspace basename.
+   * @returns a shodh-safe tenant label.
+   */
+  function sanitizeTenant(raw) {
+    const cleaned = String(raw)
+      .replace(/[^A-Za-z0-9._@-]+/g, '-')
+      .replace(/^[-.]+|[-.]+$/g, '');
+    return cleaned || 'default';
   }
 
   /** Shared state: dedupe ledgers, scoped to this plugin fiber's lifetime. */
