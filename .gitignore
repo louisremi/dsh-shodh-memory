@@ -7,6 +7,11 @@ node_modules/
 boot*.log
 load-marker.json
 
+# Local NAS access shim: ssh config + helper that reference a key outside this
+# repo. Machine-specific and never published.
+.sshcfg
+/nas
+
 # Editor / OS noise
 .DS_Store
 *.swp

@@ -388,10 +388,14 @@ The wire shapes in this plugin were derived by reading the **official
 `@shodh/memory-mcp` 0.2.0 client source**, not by guessing, and the test suite
 uses a faithful fake implementing those shapes.
 
-**It has not been exercised against a live shodh server.** The harness-side
-integration is fully verified; the server-side contract is verified against the
-reference client rather than the running binary. If you hit a shape mismatch,
-`src/client.js` is the single place to adjust.
+**Verified against a live shodh server as of v0.1.1.** The plugin was booted
+against a real `varunshodh/shodh-memory:0.2.0` container and exercised
+end-to-end: `health`, `remember`, `recall` (returning the `.experience`-nested
+shape `src/format.js` expects), `stats`, and `forget` all behaved as modelled,
+and a real cordis `Context` boot registered `memory_save`, `memory_search`,
+`memory_forget`, the `/shodh` command, and the prompt section. The reference
+client and the running binary agree. If a future server version changes a shape,
+`src/client.js` is still the single place to adjust.
 
 ---
 

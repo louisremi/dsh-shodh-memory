@@ -1,0 +1,5 @@
+      # Added 2026-09-19: the X-API-Key the dsh-shodh-memory plugin sends to
+      # the shodh-memory service above. The plugin reads the variable named by
+      # `apiKeyEnv` in its config (see /dsh/profiles/web/cordis.patch.yml),
+      # so the key lives in .env and never in a patch file.
+      - SHODH_API_KEY=${SHODH_API_KEY:?set SHODH_API_KEY in .env}

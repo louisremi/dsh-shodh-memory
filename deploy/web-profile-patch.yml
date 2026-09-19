@@ -1,0 +1,66 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+
+# NOTE: The Home Assistant MCP lives in the `ha` profile, not here.
+# ha-mcp's 78 tool definitions cost ~64,800 tokens (~25% of the 262k context
+# window) on every request, so it is kept out of the default `web` profile.
+# Boot `dsh --profile ha` when working on Home Assistant.
+# See /dsh/profiles/ha/cordis.patch.yml for the config and why its URL differs
+# from the Claude Code one.
+
+# Added 2026-09-19: point the shodh-memory plugin at the shodh-memory service
+# in this project's own docker-compose.yml (same docker-compose-nas network),
+# instead of the bundle default of 127.0.0.1:3030.
+#
+# IMPORTANT — a patch REPLACES the whole `config` block of the row it targets,
+# it does not deep-merge. So every field we want kept must be restated here;
+# anything omitted falls back to the plugin's own normalizeConfig() defaults in
+# src/config.js, not to the bundle's values. See the bundle layer in
+# dsh-shodh-memory/cordis.patch.yml for what each field does.
+#
+# The API key is read from the SHODH_API_KEY env var (set on the
+# deepseek-harness container in docker-compose.yml, sourced from .env).
+# `apiKeyEnv` names that variable; the plugin never sees the key in config.
+- id: shodh-memory
+  config:
+    # Reachable by compose service name over docker-compose-nas. Deliberately
+    # NOT the tailscale/tsdproxy hostname: containers in this network cannot
+    # resolve *.tail668c20.ts.net, same reason the harness talks to the
+    # Halogen and Paiton routes by raw address.
+    baseUrl: http://shodh-memory:3030
+    apiKeyEnv: SHODH_API_KEY
+
+    # Per-workspace namespaces (`dsh:<basename(cwd)>`) so memory from one
+    # project does not surface in another. Recommended for coding use; the
+    # bundle default is 'global'.
+    userIdScope: workspace
+
+    requestTimeoutMs: 3000
+    recallTimeoutMs: 1500
+    captureTimeoutMs: 4000
+    failureThreshold: 3
+    failureCooldownMs: 30000
+
+    tools:
+      save: true
+      search: true
+      forget: true
+
+    autoRecall:
+      enabled: true
+      maxChars: 1200
+      maxResults: 5
+      minPromptChars: 12
+      reuseGapTurns: 8
+      queryChars: 500
+
+    autoCapture:
+      enabled: true
+      userPrompts: true
+      toolErrors: true
+      assistantReplies: false
+      maxChars: 900
+      minChars: 24
+
+    promptSection: true

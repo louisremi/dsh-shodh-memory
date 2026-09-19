@@ -1,0 +1,111 @@
+  # Added 2026-09-19: shodh-memory-init. Seeds nothing, but fixes ownership on
+  # the shodh-data volume before the server starts.
+  #
+  # Why this is needed: the shodh image runs as its own `shodh` user (uid/gid
+  # 1000), but a fresh compose named volume is created on the host owned by
+  # whoever the daemon saw first -- here `louisremi` with no group-write -- so
+  # the server dies immediately with `Error: Permission denied (os error 13)`
+  # when RocksDB tries to open /data. Same shape as the chown in
+  # deepseek-harness-init above, different uid.
+  #
+  # Idempotent: only chowns when the owner is not already 1000.
+  shodh-memory-init:
+    image: alpine:3
+    container_name: shodh-memory-init
+    restart: "no"
+    user: "0:0"
+    volumes:
+      - shodh-data:/shodh-data
+    command:
+      - sh
+      - -c
+      - |
+        [ "$(stat -c '%u' /shodh-data)" = "1000" ] || chown 1000:1000 /shodh-data
+        chmod 700 /shodh-data
+
+  # Added 2026-09-19: shodh-memory, the persistent memory server backing the
+  # `dsh-shodh-memory` plugin in the deepseek-harness container above.
+  #
+  # Native plugin, not MCP: shodh's own MCP surface exposes 51 tool definitions
+  # (~7.5k tokens of standing context on every request). The dsh plugin talks to
+  # this REST API directly and keeps ~500 tokens standing instead. The MCP server
+  # is not run here at all.
+  #
+  # Upstream: github.com/varun29ankuS/shodh-memory (Apache-2.0). No LLM in the
+  # loop -- embeddings and NER run locally (ONNX), so this needs no API keys of
+  # its own and no external database.
+  shodh-memory:
+    # Pinned by digest: the image publishes `latest` but upstream moves fast and
+    # 0.2.0 is the newest published build. Re-resolve on bump:
+    #   docker manifest inspect varunshodh/shodh-memory:<tag>
+    image: varunshodh/shodh-memory:0.2.0@sha256:6bceb98e380c13ada5bfe460a69180c8aace53f6abd3a0abb299cc322b571f34
+    container_name: shodh-memory
+    restart: unless-stopped
+
+    depends_on:
+      shodh-memory-init:
+        condition: service_completed_successfully
+
+    environment:
+      # Bind inside the container so tsdproxy / sibling containers on
+      # docker-compose-nas can reach it. Upstream defaults to 127.0.0.1, which
+      # under bridge networking is unreachable from anywhere else -- the exact
+      # silent-failure trap documented on the qwen38 service on NASBIS.
+      - SHODH_HOST=0.0.0.0
+      - SHODH_PORT=3030
+      # Production mode. NOTE: this is a BOOLEAN flag in the binary, not a
+      # string. The upstream README says `SHODH_ENV=production`, but the image
+      # wires that env var to clap's `--production` bool, so the literal value
+      # "production" is rejected at startup with:
+      #   error: invalid value 'production' for '--production' [possible values: true, false]
+      # `true` is what actually turns on stricter CORS + automatic backups.
+      - SHODH_ENV=true
+
+      # The key the dsh plugin sends as X-API-Key. Same value in .env, which is
+      # also what the harness container gets via its own env passthrough.
+      - SHODH_API_KEYS=${SHODH_API_KEY:?set SHODH_API_KEY in .env}
+
+      # Data dir. Matches the image's own /data convention so the named volume
+      # below mounts where the server actually writes.
+      - SHODH_MEMORY_PATH=/data
+
+      # Zenoh/ROS2 transport is irrelevant here and would open another port.
+      - SHODH_ZENOH_ENABLED=false
+
+    # No `ports:` -- same posture as deepseek-harness and holyclaude above.
+    # Reachable by service name over docker-compose-nas; publishing 3030 on the
+    # LAN would only widen exposure of a store that holds every prompt.
+    expose:
+      - "3030"
+
+    volumes:
+      # Named volume, not a bind mount: shodh runs on RocksDB, which needs real
+      # file locking. shfs (/mnt/user) cannot provide it -- the same reason
+      # dsh-home and cloudcli-data are named volumes in this project.
+      - shodh-data:/data
+
+    healthcheck:
+      # `curl`, not `wget`: this image ships curl at /usr/bin/curl and no wget
+      # at all, so a wget-based probe fails with "sh: 1: wget: not found" and
+      # pins the container unhealthy forever even while the server answers fine.
+      #
+      # Probes loopback from inside, so it proves the server is up but NOT that
+      # the port is reachable from the harness. Verify the real path separately.
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - -o
+        - /dev/null
+        - http://127.0.0.1:3030/health
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    labels:
+      # tsdproxy publishing is deliberately OFF. The harness reaches this by
+      # service name over the docker network; a public tailnet hostname for a
+      # memory store containing every prompt would be a real exposure. Flip to
+      # true only if you want the TUI/dashboard from a browser.
+      - tsdproxy.enable=false
