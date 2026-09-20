@@ -11,6 +11,9 @@ window**.
 > [varun29ankuS/shodh-memory](https://github.com/varun29ankuS/shodh-memory) —
 > see [Credits](#credits).
 
+**Install:** `dsh plugin --profile web add dsh-shodh-memory`
+(published to npm — [registry](https://www.npmjs.com/package/dsh-shodh-memory))
+
 ---
 
 ## Why not just use the MCP server?
@@ -131,7 +134,37 @@ that's already loaded.
 
 ## Install
 
-### 1. Start shodh-memory
+### The easy way — install from npm
+
+The plugin is published to npm as **`dsh-shodh-memory`**. One command:
+
+```bash
+dsh plugin --profile web add dsh-shodh-memory
+```
+
+That's it. `dsh plugin add` installs the package into your profile's
+`node_modules` and, because the package declares `dsh.bundle.patch`,
+automatically joins the bundle layer stack — the patch layer, the three tools
+(`memory_save`, `memory_search`, `memory_forget`), the `/shodh` command, and
+the prompt section all come along. No build step, no manual wiring.
+
+Update to the latest version later with:
+
+```bash
+dsh plugin --profile web update dsh-shodh-memory
+```
+
+The plugin has **no runtime dependencies**, so the install pulls in nothing
+beyond the package itself.
+
+---
+
+### Full setup (first time)
+
+The npm line above is the only step most people need. The rest is first-time
+setup: getting a shodh-memory server running and pointing the plugin at it.
+
+#### 1. Start shodh-memory
 
 ```bash
 # Binary / brew
@@ -148,7 +181,7 @@ Confirm it is up:
 curl http://localhost:3030/health     # {"status":"ok"}
 ```
 
-### 2. Export the API key
+#### 2. Export the API key
 
 The plugin reads the key from an environment variable (name configurable via
 `apiKeyEnv`, default `SHODH_API_KEY`). `shodh init` prints the key it
@@ -158,13 +191,13 @@ generated.
 export SHODH_API_KEY=<key from shodh init>
 ```
 
-### 3. Add the plugin to your profile
+#### 3. Add the plugin to your profile
 
 ```bash
-dsh plugin --profile web add <path-or-package>
+dsh plugin --profile web add dsh-shodh-memory
 ```
 
-From a local checkout:
+From a local checkout (for development, instead of the npm package):
 
 ```bash
 dsh plugin --profile web add /path/to/dsh-shodh-memory
