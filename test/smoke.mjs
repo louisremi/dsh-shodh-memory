@@ -228,7 +228,7 @@ check('decision still enters', decision.kind === 'enter');
 check('one message appended (the recall block)', decision.messages.length === 2);
 const injected = decision.messages[1];
 check('injected as user role', injected.role === 'user');
-check('attributed to the plugin', injected.source?.plugin === 'shodh-memory');
+check('attributed to the plugin', injected.source?.kind === 'plugin:shodh-memory');
 check('tagged as recall form', injected.source?.form === 'recall');
 const injectedText = injected.content[0].text;
 check('block has a header', injectedText.startsWith('Relevant memories (shodh):'));
