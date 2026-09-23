@@ -93,7 +93,16 @@ export function installRecall(ctx, { client, cfg, state, createUserMessage, reso
 
     const message = createUserMessage({
       content: [{ type: 'text', text: block }],
-      source: { kind: 'plugin', plugin: 'shodh-memory', form: 'recall' },
+      // DSH 0.1.7 upgraded the session log to format v4, which retired the
+      // `{ kind: 'plugin', plugin: <name> }` wrapper: admission now throws
+      // "format v4 message requires a producer-owned source kind" for any
+      // source whose kind is literally 'plugin'. Every producer owns its own
+      // kind instead. This is the exact shape upstream's own v3->v4 migration
+      // generates for a third-party plugin (producerKind() in
+      // @deepseek-ai/dsh-session-format-v3-to-v4 falls back to
+      // `plugin:${name}` for names it does not recognise, and drops the now
+      // redundant `plugin` field while preserving other keys such as `form`).
+      source: { kind: 'plugin:shodh-memory', form: 'recall' },
     });
 
     return { ...decision, messages: [...decision.messages, message] };
