@@ -454,6 +454,14 @@ and a real cordis `Context` boot registered `memory_save`, `memory_search`,
 client and the running binary agree. If a future server version changes a shape,
 `src/client.ts` is still the single place to adjust.
 
+### Contributing
+
+All changes land through pull requests. `master` is protected: direct pushes
+are rejected and PRs merge only after CI goes green (`.github/workflows/`:
+lint, typecheck, build, test). Branch from `master`, push, open a PR with
+`gh pr create`, merge once checks pass. The same rules are spelled out for
+coding agents in [AGENTS.md](AGENTS.md).
+
 ---
 
 ## Design notes
@@ -480,7 +488,7 @@ re-remembered, which would otherwise turn the store into an echo chamber.
 **Config has no schema export.**
 Cordis validates config only when the runtime exports a `Config` implementing
 the Standard Schema interface. Pulling in schemastery for one document is not
-worth the dependency, so every field is normalized and clamped in `config.js`
+worth the dependency, so every field is normalized and clamped in `config.ts`
 instead, and unknown keys are ignored rather than fatal — a mistyped override
 should never stop the harness from booting.
 
@@ -490,20 +498,25 @@ should never stop the harness from booting.
 
 ```
 package.json          dsh.bundle declaration
+tsconfig.json         strict TypeScript; build emits dist/ with types
+biome.json            lint + format (Biome), whole repo clean
 cordis.patch.yml      the bundle layer, fully commented
 src/
-  index.js          entry: name / inject / apply, wiring, prompt section
-  config.js         normalization and clamping (no schema dependency)
-  client.js         REST over fetch, timeouts, circuit breaker
-  format.js         text extraction; two budgets — capped block, full-text results
-  capture.js        session events → /api/remember
-  recall.js         turn prompt → /api/recall → injected block
-  tools.js          memory_save / memory_search / memory_forget
-  commands.js       /shodh
+  index.ts          entry: name / inject / apply, wiring, prompt section
+  types.ts          structural types (plugin surface, JSON values)
+  config.ts         normalization and clamping (no schema dependency)
+  client.ts         REST over fetch, timeouts, circuit breaker
+  format.ts         text extraction; two budgets — capped block, full-text results
+  capture.ts        session events → /api/remember
+  recall.ts         turn prompt → /api/recall → injected block
+  tools.ts          memory_save / memory_search / memory_forget
+  commands.ts       /shodh
 test/
-  format.mjs        24-check unit test for the two rendering budgets
-  smoke.mjs         50-check end-to-end test against a fake shodh
+  format.test.ts    24-check unit test for the two rendering budgets
+  smoke.test.ts     50-check end-to-end test against a fake shodh
   overlay.yml       dev overlay for booting inside a real harness
+deploy/               live-server verification scripts (dev-only, not published)
+.github/workflows/    CI (lint, typecheck, build, test)
 docs/
   research.md       sourced notes on the dsh plugin contract and peer plugins
 ```
