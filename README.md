@@ -462,6 +462,20 @@ lint, typecheck, build, test). Branch from `master`, push, open a PR with
 `gh pr create`, merge once checks pass. The same rules are spelled out for
 coding agents in [AGENTS.md](AGENTS.md).
 
+### Releasing
+
+Cut a release by bumping the version in `package.json` (through a PR) and
+pushing a tag:
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+CI then creates the GitHub release with notes generated from the commits
+since the previous tag, and the published release is automatically built and
+published to npm with provenance attestation (`NPM_TOKEN` repo secret is
+required; never publish from a laptop).
+
 ---
 
 ## Design notes
@@ -516,7 +530,7 @@ test/
   smoke.test.ts     50-check end-to-end test against a fake shodh
   overlay.yml       dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
-.github/workflows/    CI (lint, typecheck, build, test)
+.github/workflows/    CI, plus release automation (tag → release → npm)
 docs/
   research.md       sourced notes on the dsh plugin contract and peer plugins
 ```

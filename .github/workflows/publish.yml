@@ -1,0 +1,43 @@
+name: Publish
+
+# Runs when a GitHub release is published (including the automated ones from
+# release.yml). Builds from the release tag and publishes to npm with
+# provenance attestation. Requires the NPM_TOKEN repo secret (npm access
+# token, Automation kind).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint (Biome)
+        run: pnpm run lint
+
+      - name: Test (builds dist/)
+        run: pnpm test
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
