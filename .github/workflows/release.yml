@@ -1,0 +1,27 @@
+name: Release
+
+# Push a `v*` tag to cut a release:
+#   git tag v0.3.0 && git push origin v0.3.0
+# The release body is generated from the commit history since the previous
+# tag. Publishing to npm happens in publish.yml once the release exists.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes
