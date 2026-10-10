@@ -11,6 +11,8 @@
  * @module config
  */
 
+import type { ShodhConfig } from './types.js';
+
 /** Hard ceilings that keep a mistyped config from producing an unbounded prompt. */
 const LIMITS = {
   maxChars: 8000,
@@ -24,23 +26,23 @@ const LIMITS = {
 };
 
 /** @returns `value` when it is a finite number, else `fallback`. */
-function num(value, fallback) {
+function num(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 /** @returns `value` clamped into `[min, max]`, falling back to `fallback`. */
-function clamp(value, min, max, fallback) {
+function clamp(value: unknown, min: number, max: number, fallback: number): number {
   const n = num(value, fallback);
   return Math.min(max, Math.max(min, n));
 }
 
 /** @returns `value` when it is a non-empty string, else `fallback`. */
-function str(value, fallback) {
+function str(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
 }
 
 /** @returns `value` when it is a boolean, else `fallback`. */
-function bool(value, fallback) {
+function bool(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
@@ -50,11 +52,14 @@ function bool(value, fallback) {
  * @param spec - per-field normalizers keyed by field name.
  * @returns the fully populated section.
  */
-function section(raw, spec) {
-  const source = raw && typeof raw === 'object' ? raw : {};
-  const out = {};
+function section<S extends Record<string, (value: unknown) => unknown>>(
+  raw: unknown,
+  spec: S,
+): { [K in keyof S]: ReturnType<S[K]> } {
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
   for (const [key, normalize] of Object.entries(spec)) out[key] = normalize(source[key]);
-  return out;
+  return out as { [K in keyof S]: ReturnType<S[K]> };
 }
 
 /**
@@ -62,13 +67,14 @@ function section(raw, spec) {
  * @param raw - the `config` block from the `cordis.patch.yml` row.
  * @returns every field populated, clamped, and safe to read without guards.
  */
-export function normalizeConfig(raw) {
-  const source = raw && typeof raw === 'object' ? raw : {};
+export function normalizeConfig(raw: unknown): ShodhConfig {
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
 
   return {
     baseUrl: str(source.baseUrl, 'http://127.0.0.1:3030').replace(/\/+$/, ''),
     apiKeyEnv: str(source.apiKeyEnv, 'SHODH_API_KEY'),
-    apiKey: typeof source.apiKey === 'string' && source.apiKey.length > 0 ? source.apiKey : undefined,
+    apiKey:
+      typeof source.apiKey === 'string' && source.apiKey.length > 0 ? source.apiKey : undefined,
     userId: str(source.userId, 'dsh'),
     userIdScope: source.userIdScope === 'workspace' ? 'workspace' : 'global',
 
@@ -111,7 +117,7 @@ export function normalizeConfig(raw) {
 }
 
 /** The memory types shodh weights, ordered by importance contribution. */
-export const MEMORY_TYPES = [
+export const MEMORY_TYPES: string[] = [
   'Decision',
   'Learning',
   'Error',

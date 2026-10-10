@@ -12,4 +12,4 @@
 # which resolves through `exports` normally.
 - insert:
     - id: shodh-memory
-      name: '/workspace/shodh-memory-dsh-integration/src/index.js'
+      name: '/workspace/shodh-memory-dsh-integration/dist/index.js'

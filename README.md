@@ -408,8 +408,10 @@ profile patch. Remove the manual one.
 ## Development
 
 ```bash
-node test/format.mjs   # the two rendering budgets, as pure functions
-node test/smoke.mjs    # end-to-end against a fake shodh
+pnpm install
+pnpm lint    # biome check (lint + format + import order)
+pnpm build   # tsc → dist/
+pnpm test    # format budgets + end-to-end smoke, against a fake shodh
 ```
 
 The format test pins the split between the always-on recall block's cap and the
@@ -446,11 +448,11 @@ uses a faithful fake implementing those shapes.
 **Verified against a live shodh server as of v0.1.1.** The plugin was booted
 against a real `varunshodh/shodh-memory:0.2.0` container and exercised
 end-to-end: `health`, `remember`, `recall` (returning the `.experience`-nested
-shape `src/format.js` expects), `stats`, and `forget` all behaved as modelled,
+shape `src/format.ts` expects), `stats`, and `forget` all behaved as modelled,
 and a real cordis `Context` boot registered `memory_save`, `memory_search`,
 `memory_forget`, the `/shodh` command, and the prompt section. The reference
 client and the running binary agree. If a future server version changes a shape,
-`src/client.js` is still the single place to adjust.
+`src/client.ts` is still the single place to adjust.
 
 ---
 

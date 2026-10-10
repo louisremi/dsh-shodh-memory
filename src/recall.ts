@@ -28,27 +28,45 @@
  * @module recall
  */
 
-import {
-  extractText,
-  normalizeMemory,
-  renderRecallBlock,
-  toQueryText,
-} from './format.js';
+import type { ShodhClient } from './client.js';
+import { extractText, normalizeMemory, renderRecallBlock, toQueryText } from './format.js';
+import type {
+  AgentRef,
+  CreateUserMessage,
+  JsonRecord,
+  JsonValue,
+  MessageLike,
+  PluginState,
+  RenderableMemory,
+  ShodhConfig,
+  ShodhContext,
+} from './types.js';
+
+/** Dependencies for {@link installRecall}. */
+export interface RecallDeps {
+  /** A {@link ShodhClient}. */
+  client: ShodhClient;
+  /** Normalized config. */
+  cfg: ShodhConfig;
+  /** Shared plugin state (injection ledger). */
+  state: PluginState;
+  /** The `@deepseek-ai/dsh-llm` factory, when available. */
+  createUserMessage?: CreateUserMessage;
+  /** `(agent?) => string` tenant resolver. */
+  resolveUserId: (agent?: AgentRef) => string;
+}
 
 /**
  * Install the auto-recall listener.
  * @param ctx - the cordis context owning the plugin fiber.
  * @param deps - wired dependencies.
- * @param deps.client - a {@link ShodhClient}.
- * @param deps.cfg - normalized config.
- * @param deps.state - shared plugin state (injection ledger).
- * @param deps.createUserMessage - the `@deepseek-ai/dsh-llm` factory.
- * @param deps.resolveUserId - `(agent?) => string` tenant resolver.
  * @returns a disposer (the listener is owned by the fiber).
  */
-export function installRecall(ctx, { client, cfg, state, createUserMessage, resolveUserId }) {
+export function installRecall(ctx: ShodhContext, deps: RecallDeps): () => void {
+  const { client, cfg, state } = deps;
+  const makeMessage = deps.createUserMessage;
   const opts = cfg.autoRecall;
-  if (!opts.enabled || !createUserMessage) return () => {};
+  if (!opts.enabled || !makeMessage) return () => {};
 
   ctx.on('agent/pre-step', async (payload, next) => {
     // Resolve the downstream decision FIRST. Everything we add rides on top of
@@ -73,10 +91,9 @@ export function installRecall(ctx, { client, cfg, state, createUserMessage, reso
     // stored memories. /api/recall is the endpoint that actually returns
     // ranked memories (score 0.95 on an exact match). The response carries a
     // `memories` array either way, so selectFresh() is unchanged.
-    const response = await client.recall(
-      { query, limit: opts.maxResults + 4 },
-      { timeoutMs: cfg.recallTimeoutMs },
-    ).catch(() => undefined);
+    const response = await client
+      .recall({ query, limit: opts.maxResults + 4 }, { timeoutMs: cfg.recallTimeoutMs })
+      .catch(() => undefined);
 
     if (payload.signal?.aborted) return decision;
 
@@ -91,7 +108,7 @@ export function installRecall(ctx, { client, cfg, state, createUserMessage, reso
     state.activity.lastInjectChars = block.length;
     state.activity.lastInjectAt = Date.now();
 
-    const message = createUserMessage({
+    const message = makeMessage({
       content: [{ type: 'text', text: block }],
       // DSH 0.1.7 upgraded the session log to format v4, which retired the
       // `{ kind: 'plugin', plugin: <name> }` wrapper: admission now throws
@@ -130,13 +147,22 @@ export function installRecall(ctx, { client, cfg, state, createUserMessage, reso
  * @param turn - the current turn number.
  * @returns up to `maxResults` normalized memories worth injecting.
  */
-function selectFresh(agent, response, state, opts, turn) {
+function selectFresh(
+  agent: AgentRef | undefined,
+  response: JsonRecord | undefined,
+  state: PluginState,
+  opts: ShodhConfig['autoRecall'],
+  turn: number,
+) {
   if (!response) return [];
 
-  const raw = [...(response.memories ?? []), ...(response.relevant_facts ?? [])];
+  const raw = [
+    ...((response.memories as JsonValue[] | undefined) ?? []),
+    ...((response.relevant_facts as JsonValue[] | undefined) ?? []),
+  ];
   const ledger = ledgerFor(state, agent);
 
-  const out = [];
+  const out: RenderableMemory[] = [];
   for (const entry of raw) {
     const memory = normalizeMemory(entry);
     if (!memory) continue;
@@ -168,7 +194,7 @@ const RELEVANCE_FLOOR = 0.2;
  * @param agent - the agent whose session keys the ledger.
  * @returns a Map of memory key → last-injected turn.
  */
-function ledgerFor(state, agent) {
+function ledgerFor(state: PluginState, agent: AgentRef | undefined): Map<string, number> {
   const id = String(agent?.session?.id ?? agent?.id ?? 'global');
   let ledger = state.injectedTurns.get(id);
   if (!ledger) {
@@ -188,10 +214,10 @@ function ledgerFor(state, agent) {
  * @param messages - the decision's message batch.
  * @returns the text, or `''` when the batch holds no human input.
  */
-function lastHumanText(messages) {
+function lastHumanText(messages: unknown[]): string {
   if (!Array.isArray(messages)) return '';
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
+    const message = messages[i] as MessageLike | undefined;
     if (message?.role !== 'user') continue;
     if (message.source?.kind !== 'user') continue;
     const text = extractText(message.content).trim();

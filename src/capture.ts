@@ -19,7 +19,18 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { ShodhClient } from './client.js';
 import { extractText } from './format.js';
+import type {
+  AgentRef,
+  PluginState,
+  SessionEvent,
+  SessionRef,
+  ShodhConfig,
+  ShodhContext,
+  ToolResultExec,
+  ToolResultPayload,
+} from './types.js';
 
 /** Cap on the pending-write queue; beyond it, the oldest writes are dropped. */
 const MAX_QUEUED = 64;
@@ -27,41 +38,64 @@ const MAX_QUEUED = 64;
 /** Cap on remembered hashes before the oldest are evicted (FIFO). */
 const MAX_HASHES = 10000;
 
+/** Dependencies for {@link installCapture}. */
+export interface CaptureDeps {
+  /** A {@link ShodhClient}. */
+  client: ShodhClient;
+  /** Normalized config. */
+  cfg: ShodhConfig;
+  /** Shared plugin state (dedupe sets, queues). */
+  state: PluginState;
+  /** `(agent?) => string` tenant resolver. */
+  resolveUserId: (agent?: AgentRef) => string;
+}
+
+/** One candidate memory handed to {@link installCapture}'s store helper. */
+interface StoreInput {
+  content: string;
+  memoryType: string;
+  tags?: string[];
+  sessionId?: string;
+}
+
 /**
  * Install the capture listeners.
  * @param ctx - the cordis context owning the plugin fiber.
  * @param deps - wired dependencies.
- * @param deps.client - a {@link ShodhClient}.
- * @param deps.cfg - normalized config.
- * @param deps.state - shared plugin state (dedupe sets, queues).
- * @param deps.resolveUserId - `(agent?) => string` tenant resolver.
  * @returns a disposer that stops capture.
  */
-export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
+export function installCapture(ctx: ShodhContext, deps: CaptureDeps): () => void {
+  const { client, cfg, state } = deps;
   const opts = cfg.autoCapture;
   if (!opts.enabled) return () => {};
 
   /** Serialize background writes so ordering is stable and nothing blocks a turn. */
-  const queue = [];
+  const queue: Array<() => Promise<unknown>> = [];
   let draining = false;
 
-  const enqueue = (task) => {
+  const enqueue = (task: () => Promise<unknown>) => {
     if (queue.length >= MAX_QUEUED) queue.shift();
     queue.push(task);
     if (draining) return;
     draining = true;
     // Yield to the event loop: capture must never extend the turn that produced it.
-    setTimeout(() => { void drain(); }, 0);
+    setTimeout(() => {
+      void drain();
+    }, 0);
   };
 
   const drain = async () => {
     try {
       while (queue.length > 0) {
         const task = queue.shift();
+        if (!task) break;
         try {
           await task();
         } catch (error) {
-          ctx.logger?.debug?.(`[shodh-memory] capture write failed: ${error?.message ?? error}`);
+          const err = error as { message?: unknown };
+          ctx.logger?.debug?.(
+            `[shodh-memory] capture write failed: ${String(err?.message ?? error)}`,
+          );
         }
       }
     } finally {
@@ -70,7 +104,7 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
   };
 
   /** Record a memory unless this exact content was already stored this process. */
-  const store = ({ content, memoryType, tags, sessionId }) => {
+  const store = ({ content, memoryType, tags, sessionId }: StoreInput) => {
     const text = content.trim();
     if (text.length < opts.minChars) {
       state.activity.captureSkipped += 1;
@@ -95,13 +129,13 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
 
   // ── human prompts ──────────────────────────────────────────────────────────
   if (opts.userPrompts) {
-    ctx.on('session/event', (session, event) => {
+    const onSessionEvent = (session: SessionRef, event: SessionEvent) => {
       if (event.type !== 'user/message') return;
       const message = event.data;
       // Only genuine human input. Plugin-injected context (including our own
       // recall block) has source.kind 'plugin' and must never be re-remembered,
       // or recalled text would feed back into the store and compound.
-      if (!message || message.source?.kind !== 'user') return;
+      if (message?.source?.kind !== 'user') return;
       const text = extractText(message.content);
       store({
         content: text,
@@ -109,12 +143,13 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
         tags: ['prompt', 'dsh'],
         sessionId: session?.id,
       });
-    });
+    };
+    ctx.on('session/event', onSessionEvent);
   }
 
   // ── failed tool calls ──────────────────────────────────────────────────────
   if (opts.toolErrors) {
-    ctx.on('tools/result', (exec, result) => {
+    const onToolResult = (exec: ToolResultExec, result: ToolResultPayload) => {
       if (!result?.isError) return;
       // Nested PTC sub-dispatches duplicate their parent's failure surface;
       // only top-level calls are worth a memory of their own.
@@ -122,19 +157,21 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
       const detail = extractText(result.content) || result.error?.message || 'unknown error';
       const reason = result.error?.info?.reason;
       const content =
-        `Tool \`${exec.name}\` failed: ${detail}` + (reason && reason !== detail ? ` (${reason})` : '');
+        `Tool \`${exec.name}\` failed: ${detail}` +
+        (reason && reason !== detail ? ` (${reason})` : '');
       store({
         content,
         memoryType: 'Error',
         tags: ['tool-error', exec.name, 'dsh'].filter(Boolean),
         sessionId: exec.agent?.session?.id,
       });
-    });
+    };
+    ctx.on('tools/result', onToolResult);
   }
 
   // ── assistant replies (opt-in) ─────────────────────────────────────────────
   if (opts.assistantReplies) {
-    ctx.on('session/event', (session, event) => {
+    const onAssistantReply = (session: SessionRef, event: SessionEvent) => {
       if (event.type !== 'assistant/message') return;
       const message = event.data;
       const text = extractText(message?.content);
@@ -145,7 +182,8 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
         tags: ['assistant', 'dsh'],
         sessionId: session?.id,
       });
-    });
+    };
+    ctx.on('session/event', onAssistantReply);
   }
 
   return () => {
@@ -154,7 +192,7 @@ export function installCapture(ctx, { client, cfg, state, resolveUserId }) {
 }
 
 /** @returns the hex sha1 of `text`, used as a content-dedup key. */
-function sha1(text) {
+function sha1(text: string): string {
   return createHash('sha1').update(text).digest('hex');
 }
 
@@ -163,7 +201,7 @@ function sha1(text) {
  * @param state - shared plugin state.
  * @param hash - the hash to record.
  */
-function rememberHash(state, hash) {
+function rememberHash(state: PluginState, hash: string): void {
   state.capturedHashes.add(hash);
   if (state.capturedHashes.size > MAX_HASHES) {
     const oldest = state.capturedHashes.values().next();
