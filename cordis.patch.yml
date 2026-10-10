@@ -30,6 +30,12 @@
 # Each toggle adds or removes ONE tool schema from every request. Three tools
 # cost roughly 350 tokens of standing context; shodh's own MCP surface exposes
 # 51 of them for ~7.5k. Turn off what you do not use.
+#   searchResultMaxChars  per-result cap on `memory_search` output. 0 (default)
+#                     returns the full stored text. Those results were requested
+#                     and `limit` already bounds them; clipping them to the
+#                     recall block's budget is what made the tool unable to
+#                     answer "what did that memory actually say". The always-on
+#                     block is the real budget — see autoRecall.maxChars.
 #
 # ── auto-recall ──────────────────────────────────────────────────────────────
 #   enabled         inject relevant memories at the start of each turn.
@@ -75,6 +81,8 @@
           save: true
           search: true
           forget: true
+          # 0 = a search result carries the full stored text; `limit` is the budget.
+          searchResultMaxChars: 0
 
         autoRecall:
           enabled: true

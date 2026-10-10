@@ -17,6 +17,7 @@ const LIMITS = {
   maxResults: 20,
   queryChars: 4000,
   captureMaxChars: 8000,
+  searchResultMaxChars: 8000,
   requestTimeoutMs: 30000,
   recallTimeoutMs: 10000,
   captureTimeoutMs: 30000,
@@ -81,6 +82,10 @@ export function normalizeConfig(raw) {
       save: (v) => bool(v, true),
       search: (v) => bool(v, true),
       forget: (v) => bool(v, true),
+      // Per-memory cap on `memory_search` output. 0 = full text, the default:
+      // these results were requested and `limit` already bounds them. Raise it
+      // only if a deployment wants a hard display budget.
+      searchResultMaxChars: (v) => clamp(v, 0, LIMITS.searchResultMaxChars, 0),
     }),
 
     autoRecall: section(source.autoRecall, {

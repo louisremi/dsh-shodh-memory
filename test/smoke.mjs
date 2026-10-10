@@ -264,6 +264,16 @@ const searchResult = await searchTool.execute({ query: 'node linker', limit: 3 }
 check('memory_search returns results', searchResult.count === 2);
 check('rendered results are text', searchTool.output.render({}, searchResult)[0].text.includes('pnpm'));
 
+// The clip bug. Search results used to inherit the injected block's 220-char cap,
+// so a long memory came back as an abbreviated index line. `render` is the only
+// thing the model sees, so this is the assertion that actually matters — and it
+// runs through the registered tool, which is what proves the config reaches it.
+const LONG_MEMORY = { id: 'long-1', content: 'Config v3 rollout notes. '.repeat(20), type: 'Learning', score: 0.8 };
+const longRender = searchTool.output.render({}, { count: 1, results: [LONG_MEMORY] })[0].text;
+check('a long search result survives render intact', longRender.includes(LONG_MEMORY.content));
+check('a long search result carries no truncation marker', !longRender.includes('…'));
+check('a long search result is longer than the recall-block cap', longRender.length > 220);
+
 const forgetTool = registeredTools.find((t) => t.name === 'memory_forget');
 const forgetResult = await forgetTool.execute({ id: 'm1' }, {});
 check('memory_forget issues DELETE', received.some((r) => r.method === 'DELETE' && r.url.includes('/api/memory/m1')));

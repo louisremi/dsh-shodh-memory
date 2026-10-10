@@ -1,6 +1,6 @@
 {
   "name": "dsh-shodh-memory",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Native shodh-memory integration for DeepSeek Harness — persistent cognitive memory without an MCP server in the context window.",
   "keywords": [
     "dsh",
@@ -17,6 +17,9 @@
   "exports": {
     ".": "./src/index.js",
     "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test/format.mjs && node test/smoke.mjs"
   },
   "files": [
     "src/**/*.js",

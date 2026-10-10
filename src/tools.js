@@ -37,7 +37,7 @@ export function registerTools(ctx, { client, cfg, defineTool, resolveUserId }) {
   const add = (definition) => disposers.push(ctx.tools.register(definition));
 
   if (cfg.tools.save) add(buildSaveTool(defineTool, client, resolveUserId));
-  if (cfg.tools.search) add(buildSearchTool(defineTool, client, resolveUserId));
+  if (cfg.tools.search) add(buildSearchTool(defineTool, client, resolveUserId, cfg.tools.searchResultMaxChars));
   if (cfg.tools.forget) add(buildForgetTool(defineTool, client, resolveUserId));
 
   return () => {
@@ -131,15 +131,18 @@ function buildSaveTool(defineTool, client, resolveUserId) {
  * @param defineTool - the dsh-tools helper.
  * @param client - the shodh client.
  * @param resolveUserId - tenant resolver.
+ * @param searchResultMaxChars - per-result cap for the rendered text; 0 = full text.
  * @returns the tool definition.
  */
-function buildSearchTool(defineTool, client, resolveUserId) {
+function buildSearchTool(defineTool, client, resolveUserId, searchResultMaxChars = 0) {
   return defineTool({
     name: 'memory_search',
     description:
       'Search long-term memory across all past sessions. Relevant memories are already ' +
       'injected at the start of each turn; use this when you need more than that block, ' +
-      'a different angle, or an exact prior decision. Returns ranked matches with ids.',
+      'a different angle, or an exact prior decision. Results carry the full stored text ' +
+      'and their ids — nothing here is abbreviated, so there is no reason to go reading ' +
+      'the memory store directly.',
     parameters: {
       query: {
         type: 'string',
@@ -173,7 +176,7 @@ function buildSearchTool(defineTool, client, resolveUserId) {
           },
         },
       },
-      render: (_args, value) => [{ type: 'text', text: renderResults(value.results) }],
+      render: (_args, value) => [{ type: 'text', text: renderResults(value.results, searchResultMaxChars) }],
     },
     timeoutMs: 8000,
     isConcurrencySafe: () => true,

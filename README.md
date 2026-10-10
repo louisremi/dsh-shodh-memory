@@ -94,11 +94,18 @@ The only things the model genuinely cannot do without help:
 | Tool | Purpose |
 |---|---|
 | `memory_save` | Persist a decision, preference, constraint, or fix |
-| `memory_search` | Go past the injected block when more context is needed |
+| `memory_search` | Go past the injected block when more context is needed — returns the **full stored text** |
 | `memory_forget` | Delete a memory that turned out to be wrong |
 
 Each is individually toggleable; every one you disable removes ~120 tokens from
 every request.
+
+Note the two budgets. The injected block is context the model never asked for, so
+`autoRecall.maxChars` caps it hard. A `memory_search` result is context the model
+*did* ask for, so it arrives in full — `limit` is what bounds it. Truncating search
+results to the block's budget makes the tool unable to answer the question it
+exists to answer, and an agent that cannot get an answer out of a tool goes and
+finds one somewhere worse.
 
 ### `/shodh` slash command
 
@@ -323,6 +330,7 @@ by targeting the row `id: shodh-memory` in `$DSH_HOME/cordis.patch.yml` or a
 | `autoCapture.toolErrors` | `true` | The highest-value automatic capture |
 | `autoCapture.assistantReplies` | `false` | High volume, low signal — leave off unless you want transcripts |
 | `tools.*` | all `true` | Each toggle saves ~120 tok per request |
+| `tools.searchResultMaxChars` | `0` | Per-result cap on `memory_search` output. `0` = full text; only raise it to force a hard display budget |
 | `promptSection` | `true` | The ~150 tok usage-guidance section |
 | `failureCooldownMs` | `30000` | How long a dead server is ignored before a probe |
 
@@ -400,16 +408,22 @@ profile patch. Remove the manual one.
 ## Development
 
 ```bash
-node test/smoke.mjs
+node test/format.mjs   # the two rendering budgets, as pure functions
+node test/smoke.mjs    # end-to-end against a fake shodh
 ```
+
+The format test pins the split between the always-on recall block's cap and the
+uncapped `memory_search` render, in both directions — a fix that inflates the
+injected block fails here even if search output looks right.
 
 The smoke test boots a real cordis context with stub services against a fake
 shodh HTTP server, then drives the same events the harness would and asserts on
-what actually reached the wire — the contract, not the internals. 44 checks
+what actually reached the wire — the contract, not the internals. 50 checks
 covering capture, the no-feedback-loop guarantee, recall budgeting and reuse
-gap, all three tools, the slash command, circuit-breaker behaviour, tenant
-scoping, and that tool output schemas are plain JSON Schema rather than
-schemastery instances (which the registry rejects).
+gap, all three tools (including that a long memory survives `memory_search`'s
+render whole), the slash command, circuit-breaker behaviour, tenant scoping, and
+that tool output schemas are plain JSON Schema rather than schemastery instances
+(which the registry rejects).
 
 To boot the plugin inside a real harness without publishing it:
 
@@ -479,13 +493,14 @@ src/
   index.js          entry: name / inject / apply, wiring, prompt section
   config.js         normalization and clamping (no schema dependency)
   client.js         REST over fetch, timeouts, circuit breaker
-  format.js         text extraction, compact capped rendering
+  format.js         text extraction; two budgets — capped block, full-text results
   capture.js        session events → /api/remember
   recall.js         turn prompt → /api/recall → injected block
   tools.js          memory_save / memory_search / memory_forget
   commands.js       /shodh
 test/
-  smoke.mjs         44-check end-to-end test against a fake shodh
+  format.mjs        24-check unit test for the two rendering budgets
+  smoke.mjs         50-check end-to-end test against a fake shodh
   overlay.yml       dev overlay for booting inside a real harness
 docs/
   research.md       sourced notes on the dsh plugin contract and peer plugins

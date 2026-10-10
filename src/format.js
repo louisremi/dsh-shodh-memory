@@ -1,11 +1,18 @@
 /**
  * Text extraction and compact rendering.
  *
- * The injected recall block is the one place this plugin writes into the model's
- * context on every turn, so its formatting is the token budget. The rule here is
- * one line per memory, no decoration, hard character cap enforced by truncation
- * from the tail — never a "…and 12 more" line that itself costs the tokens it
- * was trying to save.
+ * Two rendering paths, two budgets. The injected recall block is the one place
+ * this plugin writes into the model's context on every turn, so its formatting IS
+ * the token budget: one line per memory, no decoration, hard cap enforced by
+ * truncation from the tail — never a "…and 12 more" line that itself costs the
+ * tokens it was trying to save.
+ *
+ * Search results are the opposite case. The model asked for them and `limit` is
+ * already its own budget control, so they share the one-line shape but NOT the
+ * cap. Clipping a requested result at the always-on block's budget makes
+ * `memory_search` unable to answer the one question it exists to answer — "what
+ * did that memory actually say" — and an agent that cannot get an answer from the
+ * tool will go and get one somewhere worse.
  *
  * @module format
  */
@@ -72,18 +79,26 @@ function numberOr(value, fallback = 0) {
 }
 
 /**
+ * Per-line cap for the ALWAYS-ON recall block, passed explicitly at its call
+ * site. It is a standing per-turn cost, so it stays deliberately small; it is
+ * not a cap on anything the model asked for.
+ */
+export const RECALL_LINE_MAX_CHARS = 220;
+
+/**
  * Collapse a memory's content into a single compact line.
  *
  * Newlines become spaces and runs of whitespace collapse, because the block is
  * read as an index of facts, not as prose.
  *
  * @param memory - a {@link normalizeMemory} result.
- * @param maxChars - per-line cap.
+ * @param maxChars - per-line cap; `0` renders the content in full.
  * @returns the one-line rendering.
  */
-export function memoryLine(memory, maxChars = 220) {
+export function memoryLine(memory, maxChars = RECALL_LINE_MAX_CHARS) {
   const flat = memory.content.replace(/\s+/g, ' ').trim();
-  const body = flat.length > maxChars ? `${flat.slice(0, maxChars - 1).trimEnd()}…` : flat;
+  const cap = Number.isFinite(maxChars) ? Math.max(0, maxChars) : RECALL_LINE_MAX_CHARS;
+  const body = cap > 0 && flat.length > cap ? `${flat.slice(0, cap - 1).trimEnd()}…` : flat;
   const score = memory.score > 0 ? ` ${Math.round(clamp01(memory.score) * 100)}%` : '';
   return `- [${memory.type}${score}] ${body}`;
 }
@@ -109,7 +124,7 @@ export function renderRecallBlock(memories, maxChars) {
   let used = 0;
 
   for (const memory of memories) {
-    const line = memoryLine(memory);
+    const line = memoryLine(memory, RECALL_LINE_MAX_CHARS);
     // +1 for the newline joining this line to the block.
     if (used + line.length + 1 > maxChars - header.length) break;
     text += `\n${line}`;
@@ -121,15 +136,22 @@ export function renderRecallBlock(memories, maxChars) {
 
 /**
  * Render search results for a tool response or a slash command.
+ *
+ * Uncapped by default, on purpose. This output was requested — `limit` already
+ * bounds how many memories arrive, so bounding their text too would leave the
+ * model holding ids it cannot read. Only cap it when a caller needs a fixed
+ * display budget (see `tools.searchResultMaxChars`).
+ *
  * @param memories - normalized memories.
+ * @param maxChars - per-memory cap; `0` (the default) renders full text.
  * @returns the rendered list, or a no-results notice.
  */
-export function renderResults(memories) {
+export function renderResults(memories, maxChars = 0) {
   if (!memories || memories.length === 0) return 'No matching memories.';
   return memories
     .map((m) => {
       const id = m.id ? ` (${m.id})` : '';
-      return `${memoryLine(m)}${id}`;
+      return `${memoryLine(m, maxChars)}${id}`;
     })
     .join('\n');
 }
