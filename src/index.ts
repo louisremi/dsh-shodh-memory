@@ -29,12 +29,19 @@
  */
 
 import { basename } from 'node:path';
-import { normalizeConfig } from './config.js';
-import { ShodhClient } from './client.js';
 import { installCapture } from './capture.js';
+import { ShodhClient } from './client.js';
+import { registerCommand } from './commands.js';
+import { normalizeConfig } from './config.js';
 import { installRecall } from './recall.js';
 import { registerTools } from './tools.js';
-import { registerCommand } from './commands.js';
+import type {
+  AgentRef,
+  CreateUserMessage,
+  DefineTool,
+  PluginState,
+  ShodhContext,
+} from './types.js';
 
 /**
  * Optional peer imports.
@@ -43,16 +50,20 @@ import { registerCommand } from './commands.js';
  * peer takes the whole profile down with it. Each is resolved independently so
  * one absent package degrades one feature rather than the plugin.
  */
-let defineTool = null;
+let defineTool: DefineTool | undefined;
 try {
-  ({ defineTool } = await import('@deepseek-ai/dsh-tools'));
+  ({ defineTool } = (await import('@deepseek-ai/dsh-tools')) as unknown as {
+    defineTool?: DefineTool;
+  });
 } catch {
   /* tools are skipped; recall and capture still work */
 }
 
-let createUserMessage = null;
+let createUserMessage: CreateUserMessage | undefined;
 try {
-  ({ createUserMessage } = await import('@deepseek-ai/dsh-llm'));
+  ({ createUserMessage } = (await import('@deepseek-ai/dsh-llm')) as unknown as {
+    createUserMessage?: CreateUserMessage;
+  });
 } catch {
   /* auto-recall is skipped; tools and capture still work */
 }
@@ -73,7 +84,7 @@ export const inject = ['tools', 'commands', 'systemPrompt', 'sessions', 'agents'
  * @param ctx - the cordis context owning this plugin's fiber.
  * @param config - the `config` block from the bundle patch row.
  */
-export function apply(ctx, config) {
+export function apply(ctx: ShodhContext, config: unknown): void {
   const cfg = normalizeConfig(config);
 
   const apiKey = cfg.apiKey ?? readEnvKey(cfg.apiKeyEnv);
@@ -107,7 +118,7 @@ export function apply(ctx, config) {
    * @param agent - the agent making the call, if any.
    * @returns the tenant id.
    */
-  function resolveUserId(agent) {
+  function resolveUserId(agent?: AgentRef): string {
     if (cfg.userIdScope !== 'workspace') return cfg.userId;
     const cwd = agent?.workspaceCwd ?? agent?.workspace?.cwd ?? process.cwd();
     const label = sanitizeTenant(basename(String(cwd)) || 'default');
@@ -127,7 +138,7 @@ export function apply(ctx, config) {
    * @param raw - the raw workspace basename.
    * @returns a shodh-safe tenant label.
    */
-  function sanitizeTenant(raw) {
+  function sanitizeTenant(raw: string): string {
     const cleaned = String(raw)
       .replace(/[^A-Za-z0-9._@-]+/g, '-')
       .replace(/^[-.]+|[-.]+$/g, '');
@@ -135,9 +146,9 @@ export function apply(ctx, config) {
   }
 
   /** Shared state: dedupe ledgers, scoped to this plugin fiber's lifetime. */
-  const state = {
-    capturedHashes: new Set(),
-    injectedTurns: new Map(),
+  const state: PluginState = {
+    capturedHashes: new Set<string>(),
+    injectedTurns: new Map<string, Map<string, number>>(),
     // Session activity counters, surfaced by `/shodh status`. These are
     // process-lifetime tallies (reset on reload), not persisted history — they
     // answer "what has this running plugin actually done", which is what makes
@@ -162,14 +173,17 @@ export function apply(ctx, config) {
 
   // ctx.effect ties teardown to the fiber, so HMR reloads do not leave a second
   // copy of every listener registered against the same session stream.
-  ctx.effect(() => () => {
-    stopCapture();
-    stopRecall();
-    stopTools();
-    stopCommand();
-    state.capturedHashes.clear();
-    state.injectedTurns.clear();
-  }, 'dsh-shodh-memory: teardown');
+  ctx.effect(
+    () => () => {
+      stopCapture();
+      stopRecall();
+      stopTools();
+      stopCommand();
+      state.capturedHashes.clear();
+      state.injectedTurns.clear();
+    },
+    'dsh-shodh-memory: teardown',
+  );
 
   ctx.logger?.info?.(
     `[shodh-memory] active → ${cfg.baseUrl} (tenant ${cfg.userIdScope === 'workspace' ? 'per-workspace' : cfg.userId})`,
@@ -185,7 +199,7 @@ export function apply(ctx, config) {
  * @param ctx - the cordis context.
  * @param cfg - normalized config.
  */
-function registerPromptSection(ctx, cfg) {
+function registerPromptSection(ctx: ShodhContext, cfg: ReturnType<typeof normalizeConfig>): void {
   const recallLine = cfg.autoRecall.enabled
     ? 'Relevant memories are injected automatically at the start of each turn as a "Relevant memories (shodh)" block. You do not need to ask for them.'
     : 'Memories are not injected automatically; use memory_search when you need past context.';
@@ -217,7 +231,7 @@ function registerPromptSection(ctx, cfg) {
  * @param envName - the configured variable name.
  * @returns the key, or `undefined`.
  */
-function readEnvKey(envName) {
+function readEnvKey(envName: string): string | undefined {
   const value = process.env[envName];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

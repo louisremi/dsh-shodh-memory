@@ -14,30 +14,58 @@
  * @module tools
  */
 
+import type { ShodhClient } from './client.js';
 import { MEMORY_TYPES } from './config.js';
 import { normalizeMemory, renderResults } from './format.js';
+import type {
+  AgentRef,
+  DefineTool,
+  JsonRecord,
+  JsonValue,
+  RenderableMemory,
+  ShodhConfig,
+  ShodhContext,
+  ToolDefinition,
+  ToolExec,
+} from './types.js';
+
+/** `(agent?) => string` tenant resolver. */
+export type TenantResolver = (agent?: AgentRef) => string;
+
+/** Dependencies for {@link registerTools}. */
+export interface ToolsDeps {
+  /** A {@link ShodhClient}. */
+  client: ShodhClient;
+  /** Normalized config. */
+  cfg: ShodhConfig;
+  /** The `@deepseek-ai/dsh-tools` helper, when available. */
+  defineTool: DefineTool | undefined;
+  /** Tenant resolver. */
+  resolveUserId: TenantResolver;
+}
 
 /**
  * Register the enabled tools.
  * @param ctx - the cordis context owning the plugin fiber.
  * @param deps - wired dependencies.
- * @param deps.client - a {@link ShodhClient}.
- * @param deps.cfg - normalized config.
- * @param deps.defineTool - the `@deepseek-ai/dsh-tools` helper.
- * @param deps.resolveUserId - `(agent?) => string` tenant resolver.
  * @returns a disposer unregistering every tool that was added.
  */
-export function registerTools(ctx, { client, cfg, defineTool, resolveUserId }) {
+export function registerTools(ctx: ShodhContext, deps: ToolsDeps): () => void {
+  const { client, cfg, resolveUserId } = deps;
+  const defineTool = deps.defineTool;
   if (!defineTool) {
-    ctx.logger?.warn?.('[shodh-memory] @deepseek-ai/dsh-tools unavailable; no memory tools registered');
+    ctx.logger?.warn?.(
+      '[shodh-memory] @deepseek-ai/dsh-tools unavailable; no memory tools registered',
+    );
     return () => {};
   }
 
-  const disposers = [];
-  const add = (definition) => disposers.push(ctx.tools.register(definition));
+  const disposers: (() => void)[] = [];
+  const add = (definition: ToolDefinition) => disposers.push(ctx.tools.register(definition));
 
   if (cfg.tools.save) add(buildSaveTool(defineTool, client, resolveUserId));
-  if (cfg.tools.search) add(buildSearchTool(defineTool, client, resolveUserId, cfg.tools.searchResultMaxChars));
+  if (cfg.tools.search)
+    add(buildSearchTool(defineTool, client, resolveUserId, cfg.tools.searchResultMaxChars));
   if (cfg.tools.forget) add(buildForgetTool(defineTool, client, resolveUserId));
 
   return () => {
@@ -58,7 +86,7 @@ export function registerTools(ctx, { client, cfg, defineTool, resolveUserId }) {
  * @param resolveUserId - tenant resolver.
  * @returns the tool definition.
  */
-function buildSaveTool(defineTool, client, resolveUserId) {
+function buildSaveTool(defineTool: DefineTool, client: ShodhClient, resolveUserId: TenantResolver) {
   return defineTool({
     name: 'memory_save',
     description:
@@ -94,19 +122,24 @@ function buildSaveTool(defineTool, client, resolveUserId) {
         },
       },
       render: (_args, value) => [
-        { type: 'text', text: value.saved ? `Saved to memory${value.id ? ` (${value.id})` : ''}.` : 'Memory save failed.' },
+        {
+          type: 'text',
+          text: value.saved
+            ? `Saved to memory${value.id ? ` (${value.id})` : ''}.`
+            : 'Memory save failed.',
+        },
       ],
     },
     timeoutMs: 8000,
     isConcurrencySafe: () => true,
-    async execute(args, exec) {
+    async execute(args: JsonRecord, exec: ToolExec): Promise<JsonRecord> {
       const content = typeof args.content === 'string' ? args.content.trim() : '';
       if (!content) throw new Error('memory_save: `content` must be a non-empty string');
       const result = await client.remember(
         {
           content,
-          memoryType: args.type ?? 'Decision',
-          tags: args.tags,
+          memoryType: (args.type as string | undefined) ?? 'Decision',
+          tags: args.tags as string[] | undefined,
           sessionId: exec.agent?.session?.id,
         },
         { timeoutMs: 8000, userId: resolveUserId(exec.agent) },
@@ -114,7 +147,7 @@ function buildSaveTool(defineTool, client, resolveUserId) {
       return {
         saved: true,
         id: typeof result?.id === 'string' ? result.id : undefined,
-        type: args.type ?? 'Decision',
+        type: (args.type as string | undefined) ?? 'Decision',
       };
     },
     presentCall: (args) => ({
@@ -134,7 +167,12 @@ function buildSaveTool(defineTool, client, resolveUserId) {
  * @param searchResultMaxChars - per-result cap for the rendered text; 0 = full text.
  * @returns the tool definition.
  */
-function buildSearchTool(defineTool, client, resolveUserId, searchResultMaxChars = 0) {
+function buildSearchTool(
+  defineTool: DefineTool,
+  client: ShodhClient,
+  resolveUserId: TenantResolver,
+  searchResultMaxChars = 0,
+) {
   return defineTool({
     name: 'memory_search',
     description:
@@ -176,11 +214,19 @@ function buildSearchTool(defineTool, client, resolveUserId, searchResultMaxChars
           },
         },
       },
-      render: (_args, value) => [{ type: 'text', text: renderResults(value.results, searchResultMaxChars) }],
+      render: (_args, value) => [
+        {
+          type: 'text',
+          text: renderResults(
+            value.results as unknown as RenderableMemory[] | undefined,
+            searchResultMaxChars,
+          ),
+        },
+      ],
     },
     timeoutMs: 8000,
     isConcurrencySafe: () => true,
-    async execute(args, exec) {
+    async execute(args: JsonRecord, exec: ToolExec): Promise<JsonRecord> {
       const query = typeof args.query === 'string' ? args.query.trim() : '';
       if (!query) throw new Error('memory_search: `query` must be a non-empty string');
       const limit = Math.min(20, Math.max(1, Number(args.limit ?? 5) || 5));
@@ -189,9 +235,9 @@ function buildSearchTool(defineTool, client, resolveUserId, searchResultMaxChars
         { query, limit, mode: 'semantic' },
         { timeoutMs: 8000, userId: resolveUserId(exec?.agent) },
       );
-      const results = (response?.memories ?? [])
+      const results: JsonRecord[] = ((response?.memories as JsonValue[] | undefined) ?? [])
         .map(normalizeMemory)
-        .filter(Boolean)
+        .filter((m): m is RenderableMemory => Boolean(m))
         .slice(0, limit)
         .map((m) => ({
           id: m.id || undefined,
@@ -215,9 +261,14 @@ function buildSearchTool(defineTool, client, resolveUserId, searchResultMaxChars
  * `memory_forget` — delete a memory that is wrong or stale.
  * @param defineTool - the dsh-tools helper.
  * @param client - the shodh client.
+ * @param resolveUserId - tenant resolver.
  * @returns the tool definition.
  */
-function buildForgetTool(defineTool, client, resolveUserId) {
+function buildForgetTool(
+  defineTool: DefineTool,
+  client: ShodhClient,
+  resolveUserId: TenantResolver,
+) {
   return defineTool({
     name: 'memory_forget',
     description:
@@ -241,11 +292,16 @@ function buildForgetTool(defineTool, client, resolveUserId) {
         },
       },
       render: (_args, value) => [
-        { type: 'text', text: value.forgotten ? `Forgot memory ${value.id ?? ''}.`.trim() : 'Nothing was deleted.' },
+        {
+          type: 'text',
+          text: value.forgotten
+            ? `Forgot memory ${value.id ?? ''}.`.trim()
+            : 'Nothing was deleted.',
+        },
       ],
     },
     timeoutMs: 8000,
-    async execute(args, exec) {
+    async execute(args: JsonRecord, exec: ToolExec): Promise<JsonRecord> {
       const id = typeof args.id === 'string' ? args.id.trim() : '';
       if (!id) throw new Error('memory_forget: `id` must be a non-empty string');
       await client.forget(id, { timeoutMs: 8000, userId: resolveUserId(exec?.agent) });

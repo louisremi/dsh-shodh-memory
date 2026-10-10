@@ -8,26 +8,48 @@
  * @module commands
  */
 
+import type { ShodhClient } from './client.js';
 import { normalizeMemory } from './format.js';
+import type { TenantResolver } from './tools.js';
+import type {
+  ActivityCounters,
+  CommandInvocation,
+  CommandResult,
+  JsonRecord,
+  JsonValue,
+  PluginState,
+  RenderableMemory,
+  ShodhConfig,
+  ShodhContext,
+} from './types.js';
+
+/** Dependencies for {@link registerCommand}. */
+export interface CommandDeps {
+  /** A {@link ShodhClient}. */
+  client: ShodhClient;
+  /** Normalized config. */
+  cfg: ShodhConfig;
+  /** Shared plugin state. */
+  state: PluginState;
+  /** Tenant resolver. */
+  resolveUserId: TenantResolver;
+}
 
 /**
  * Register `/shodh`.
  * @param ctx - the cordis context owning the plugin fiber.
  * @param deps - wired dependencies.
- * @param deps.client - a {@link ShodhClient}.
- * @param deps.cfg - normalized config.
- * @param deps.state - shared plugin state.
- * @param deps.resolveUserId - `(agent?) => string` tenant resolver.
  * @returns a disposer unregistering the command.
  */
-export function registerCommand(ctx, { client, cfg, state, resolveUserId }) {
+export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => void {
+  const { client, cfg, state, resolveUserId } = deps;
   return ctx.commands.register({
     name: 'shodh',
     description: 'shodh-memory: status, save, search, summary, forget',
     input: { hint: '[status | save <text> | search <query> | summary | forget <id>]' },
-    async handler(invocation) {
+    async handler(invocation: CommandInvocation): Promise<CommandResult> {
       const input = (invocation.rawInput ?? '').trim();
-      const [verb = 'status', ...rest] = input.split(/\s+/);
+      const [verb = 'status'] = input.split(/\s+/);
       const argument = input.slice(verb.length).trim();
       const userId = resolveUserId(invocation.agent);
 
@@ -77,24 +99,31 @@ const HELP = [
  * @param userId - the resolved tenant.
  * @returns the command result.
  */
-async function statusResult(client, cfg, state, userId) {
+async function statusResult(
+  client: ShodhClient,
+  cfg: ShodhConfig,
+  state: PluginState,
+  userId: string,
+): Promise<CommandResult> {
   const health = await client.soft('/health', undefined, { method: 'GET', timeoutMs: 2000 });
   const reachable = health !== undefined;
-  const version = reachable && typeof health.version === 'string' ? health.version : '?';
-  const dot = !reachable ? '○' : health.status === 'healthy' ? '●' : '◐';
-  const statusWord = !reachable ? 'unreachable' : health.status ?? 'unknown';
+  const version =
+    reachable && typeof health?.version === 'string' ? (health?.version as string) : '?';
+  const dot = !reachable ? '○' : health?.status === 'healthy' ? '●' : '◐';
+  const statusWord = !reachable
+    ? 'unreachable'
+    : ((health?.status as string | undefined) ?? 'unknown');
 
-  const lines = [
-    `shodh-memory  v${version}  ${dot} ${statusWord}`,
-    '─'.repeat(44),
-  ];
+  const lines: string[] = [`shodh-memory  v${version}  ${dot} ${statusWord}`, '─'.repeat(44)];
 
   // ── identity & circuit ───────────────────────────────────────────────────
   const scopeNote = cfg.userIdScope === 'workspace' ? 'workspace scope' : 'global scope';
   lines.push(`tenant    ${userId}  (${scopeNote})`);
   lines.push(`server    ${cfg.baseUrl}`);
   if (client.breakerOpen) {
-    lines.push(`circuit   OPEN · retry in ${Math.ceil((client.openUntil - Date.now()) / 1000)}s · memory features inert`);
+    lines.push(
+      `circuit   OPEN · retry in ${Math.ceil((client.openUntil - Date.now()) / 1000)}s · memory features inert`,
+    );
   } else {
     lines.push(`circuit   closed · ${client.consecutiveFailures} consecutive failure(s)`);
   }
@@ -116,7 +145,10 @@ async function statusResult(client, cfg, state, userId) {
       lines.push(`store     ${total} ${total === 1 ? 'memory' : 'memories'}   ${tiers}`);
       const graph = `graph ${stats.graph_nodes ?? 0} nodes / ${stats.graph_edges ?? 0} edges`;
       const vec = `vectors ${stats.vector_index_count ?? 0}`;
-      const imp = typeof stats.average_importance === 'number' ? ` · avg importance ${stats.average_importance.toFixed(2)}` : '';
+      const imp =
+        typeof stats.average_importance === 'number'
+          ? ` · avg importance ${stats.average_importance.toFixed(2)}`
+          : '';
       lines.push(`          ${vec} · ${graph}${imp}`);
     }
   }
@@ -130,17 +162,21 @@ async function statusResult(client, cfg, state, userId) {
     cfg.autoCapture.userPrompts && 'prompts',
     cfg.autoCapture.toolErrors && 'tool errors',
     cfg.autoCapture.assistantReplies && 'replies',
-  ].filter(Boolean).join(' + ');
+  ]
+    .filter(Boolean)
+    .join(' + ');
   lines.push(`capture   ${cfg.autoCapture.enabled ? `on  ${captureParts || '—'}` : 'off'}`);
   const toolList = [
     cfg.tools.save && 'memory_save',
     cfg.tools.search && 'memory_search',
     cfg.tools.forget && 'memory_forget',
-  ].filter(Boolean).join(' · ');
+  ]
+    .filter(Boolean)
+    .join(' · ');
   lines.push(`tools     ${toolList || 'none'}`);
 
   // ── this process ─────────────────────────────────────────────────────────
-  const a = state.activity ?? {};
+  const a: Partial<ActivityCounters> = state.activity ?? {};
   lines.push('');
   const lastInject = a.lastInjectChars
     ? ` · last inject ${a.lastInjectChars} chars ${ago(a.lastInjectAt)}`
@@ -163,7 +199,7 @@ async function statusResult(client, cfg, state, userId) {
  * @param ts - epoch millis, or 0/undefined for "never".
  * @returns the relative label, or 'never' when unset.
  */
-function ago(ts) {
+function ago(ts: number | undefined): string {
   if (!ts) return 'never';
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
@@ -176,16 +212,25 @@ function ago(ts) {
  * Store a memory from the command line.
  * @param client - the shodh client.
  * @param argument - the memory text.
+ * @param userId - the resolved tenant.
  * @returns the command result.
  */
-async function saveResult(client, argument, userId) {
+async function saveResult(
+  client: ShodhClient,
+  argument: string,
+  userId: string,
+): Promise<CommandResult> {
   if (!argument) return { kind: 'error', text: 'Usage: /shodh save <text>' };
-  const result = await client.soft('/api/remember', {
-    user_id: userId,
-    content: argument,
-    memory_type: 'Decision',
-    source_type: 'dsh-cli',
-  }, { timeoutMs: 8000 });
+  const result = await client.soft(
+    '/api/remember',
+    {
+      user_id: userId,
+      content: argument,
+      memory_type: 'Decision',
+      source_type: 'dsh-cli',
+    },
+    { timeoutMs: 8000 },
+  );
   if (result === undefined) return { kind: 'error', text: 'Could not reach the shodh server.' };
   return { kind: 'success', text: `Saved.${result.id ? ` id: ${result.id}` : ''}` };
 }
@@ -194,23 +239,38 @@ async function saveResult(client, argument, userId) {
  * Search from the command line.
  * @param client - the shodh client.
  * @param argument - the query.
+ * @param userId - the resolved tenant.
  * @returns the command result.
  */
-async function searchResult(client, argument, userId) {
+async function searchResult(
+  client: ShodhClient,
+  argument: string,
+  userId: string,
+): Promise<CommandResult> {
   if (!argument) return { kind: 'error', text: 'Usage: /shodh search <query>' };
-  const response = await client.soft('/api/recall', {
-    user_id: userId,
-    query: argument,
-    limit: 8,
-    mode: 'semantic',
-  }, { timeoutMs: 8000 });
+  const response = await client.soft(
+    '/api/recall',
+    {
+      user_id: userId,
+      query: argument,
+      limit: 8,
+      mode: 'semantic',
+    },
+    { timeoutMs: 8000 },
+  );
   if (response === undefined) return { kind: 'error', text: 'Could not reach the shodh server.' };
-  const memories = (response.memories ?? []).map(normalizeMemory).filter(Boolean).slice(0, 8);
+  const memories = ((response.memories as JsonValue[] | undefined) ?? [])
+    .map(normalizeMemory)
+    .filter((m): m is RenderableMemory => Boolean(m))
+    .slice(0, 8);
   if (memories.length === 0) return { kind: 'success', text: 'No matching memories.' };
   return {
     kind: 'success',
     text: memories
-      .map((m) => `- [${m.type}${m.score ? ` ${Math.round(m.score * 100)}%` : ''}] ${m.content}\n  id: ${m.id}`)
+      .map(
+        (m) =>
+          `- [${m.type}${m.score ? ` ${Math.round(m.score * 100)}%` : ''}] ${m.content}\n  id: ${m.id}`,
+      )
       .join('\n'),
   };
 }
@@ -220,12 +280,18 @@ async function searchResult(client, argument, userId) {
  * @param client - the shodh client.
  * @returns the command result.
  */
-async function summaryResult(client) {
-  const result = await client.contextSummary(6, { timeoutMs: 8000 });
+async function summaryResult(client: ShodhClient): Promise<CommandResult> {
+  const result = (await client.contextSummary(6, { timeoutMs: 8000 })) as JsonRecord | undefined;
   if (result === undefined) return { kind: 'error', text: 'Could not reach the shodh server.' };
-  const lines = [];
-  for (const [label, key] of [['Decisions', 'decisions'], ['Learnings', 'learnings'], ['Context', 'context']]) {
-    const items = (result[key] ?? []).map(normalizeMemory).filter(Boolean);
+  const lines: string[] = [];
+  for (const [label, key] of [
+    ['Decisions', 'decisions'],
+    ['Learnings', 'learnings'],
+    ['Context', 'context'],
+  ]) {
+    const items = ((result[key] as JsonValue[] | undefined) ?? [])
+      .map(normalizeMemory)
+      .filter((m): m is RenderableMemory => Boolean(m));
     if (items.length === 0) continue;
     lines.push(`${label}:`);
     for (const item of items) lines.push(`  - ${item.content}`);
@@ -237,15 +303,27 @@ async function summaryResult(client) {
  * Delete one memory.
  * @param client - the shodh client.
  * @param argument - the memory id.
+ * @param userId - the resolved tenant.
  * @returns the command result.
  */
-async function forgetResult(client, argument, userId) {
+async function forgetResult(
+  client: ShodhClient,
+  argument: string,
+  userId: string,
+): Promise<CommandResult> {
   if (!argument) return { kind: 'error', text: 'Usage: /shodh forget <id>' };
-  const result = await client.soft(`/api/memory/${encodeURIComponent(argument)}?user_id=${encodeURIComponent(userId)}`, undefined, {
-    method: 'DELETE',
-    timeoutMs: 8000,
-  });
-  if (result === undefined) return { kind: 'error', text: `Could not delete ${argument} (server unreachable or id unknown).` };
+  const result = await client.soft(
+    `/api/memory/${encodeURIComponent(argument)}?user_id=${encodeURIComponent(userId)}`,
+    undefined,
+    {
+      method: 'DELETE',
+      timeoutMs: 8000,
+    },
+  );
+  if (result === undefined)
+    return {
+      kind: 'error',
+      text: `Could not delete ${argument} (server unreachable or id unknown).`,
+    };
   return { kind: 'success', text: `Forgot ${argument}.` };
 }
-

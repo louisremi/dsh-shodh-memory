@@ -16,3 +16,7 @@ load-marker.json
 .DS_Store
 *.swp
 .ssh-local/
+
+# Build output — generated from src/*.ts, never committed.
+dist/
+build/

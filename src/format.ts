@@ -17,6 +17,8 @@
  * @module format
  */
 
+import type { JsonRecord, RenderableMemory } from './types.js';
+
 /**
  * Flatten a message's content blocks into plain text.
  *
@@ -26,15 +28,18 @@
  * @param content - a message `content` value: a string or an array of blocks.
  * @returns the concatenated text.
  */
-export function extractText(content) {
+export function extractText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
-  const parts = [];
+  const parts: string[] = [];
   for (const block of content) {
     if (typeof block === 'string') {
       parts.push(block);
-    } else if (block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
-      parts.push(block.text);
+    } else if (block && typeof block === 'object') {
+      const part = block as JsonRecord;
+      if (part.type === 'text' && typeof part.text === 'string') {
+        parts.push(part.text);
+      }
     }
   }
   return parts.join('\n');
@@ -50,23 +55,30 @@ export function extractText(content) {
  * @param raw - one entry from a `memories` array.
  * @returns the normalized view, with empty strings/zeroes where unknown.
  */
-export function normalizeMemory(raw) {
+export function normalizeMemory(raw: unknown): RenderableMemory | null {
   if (!raw || typeof raw !== 'object') return null;
-  const experience = raw.experience && typeof raw.experience === 'object' ? raw.experience : {};
-  const content = firstString(raw.content, experience.content) ?? '';
+  const record = raw as Record<string, unknown>;
+  const experience = (
+    record.experience && typeof record.experience === 'object' ? record.experience : {}
+  ) as Record<string, unknown>;
+  const content = firstString(record.content, experience.content) ?? '';
   if (!content) return null;
   return {
-    id: firstString(raw.id, experience.id) ?? '',
+    id: firstString(record.id, experience.id) ?? '',
     content,
-    type: firstString(raw.memory_type, experience.memory_type, experience.experience_type) ?? 'Observation',
-    tier: firstString(raw.tier),
-    score: numberOr(raw.relevance_score, numberOr(raw.score, numberOr(raw.importance, 0))),
-    tags: Array.isArray(raw.tags) ? raw.tags.filter((t) => typeof t === 'string') : [],
+    type:
+      firstString(record.memory_type, experience.memory_type, experience.experience_type) ??
+      'Observation',
+    tier: firstString(record.tier),
+    score: numberOr(record.relevance_score, numberOr(record.score, numberOr(record.importance, 0))),
+    tags: Array.isArray(record.tags)
+      ? record.tags.filter((t): t is string => typeof t === 'string')
+      : [],
   };
 }
 
 /** @returns the first argument that is a non-empty string. */
-function firstString(...values) {
+function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === 'string' && value.length > 0) return value;
   }
@@ -74,7 +86,7 @@ function firstString(...values) {
 }
 
 /** @returns `value` when it is a finite number, else `fallback`. */
-function numberOr(value, fallback = 0) {
+function numberOr(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
@@ -95,7 +107,7 @@ export const RECALL_LINE_MAX_CHARS = 220;
  * @param maxChars - per-line cap; `0` renders the content in full.
  * @returns the one-line rendering.
  */
-export function memoryLine(memory, maxChars = RECALL_LINE_MAX_CHARS) {
+export function memoryLine(memory: RenderableMemory, maxChars = RECALL_LINE_MAX_CHARS): string {
   const flat = memory.content.replace(/\s+/g, ' ').trim();
   const cap = Number.isFinite(maxChars) ? Math.max(0, maxChars) : RECALL_LINE_MAX_CHARS;
   const body = cap > 0 && flat.length > cap ? `${flat.slice(0, cap - 1).trimEnd()}…` : flat;
@@ -104,7 +116,7 @@ export function memoryLine(memory, maxChars = RECALL_LINE_MAX_CHARS) {
 }
 
 /** @returns `value` clamped to [0, 1]. */
-function clamp01(value) {
+function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
@@ -116,7 +128,10 @@ function clamp01(value) {
  * @param maxChars - hard cap on the whole block.
  * @returns the block text, or `''` when there is nothing to say.
  */
-export function renderRecallBlock(memories, maxChars) {
+export function renderRecallBlock(
+  memories: RenderableMemory[] | undefined,
+  maxChars: number,
+): string {
   if (!memories || memories.length === 0) return '';
 
   const header = 'Relevant memories (shodh):';
@@ -146,7 +161,7 @@ export function renderRecallBlock(memories, maxChars) {
  * @param maxChars - per-memory cap; `0` (the default) renders full text.
  * @returns the rendered list, or a no-results notice.
  */
-export function renderResults(memories, maxChars = 0) {
+export function renderResults(memories: RenderableMemory[] | undefined, maxChars = 0): string {
   if (!memories || memories.length === 0) return 'No matching memories.';
   return memories
     .map((m) => {
@@ -167,7 +182,7 @@ export function renderResults(memories, maxChars = 0) {
  * @param maxChars - cap applied after cleaning.
  * @returns the cleaned query text.
  */
-export function toQueryText(text, maxChars) {
+export function toQueryText(text: string, maxChars: number): string {
   if (!text) return '';
   const cleaned = text
     .replace(/```[\s\S]*?```/g, ' ') // fenced code
