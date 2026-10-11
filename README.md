@@ -472,9 +472,10 @@ git tag v0.3.0 && git push origin v0.3.0
 ```
 
 CI then creates the GitHub release with notes generated from the commits
-since the previous tag, and the published release is automatically built and
-published to npm with provenance attestation (`NPM_TOKEN` repo secret is
-required; never publish from a laptop).
+since the previous tag, and publishes it to npm with provenance attestation
+(`NPM_TOKEN` repo secret is required; never publish from a laptop). If
+publication fails after the release is out, fix the cause and replay it with
+`gh workflow run publish.yml -f tag=v0.3.0`.
 
 ---
 

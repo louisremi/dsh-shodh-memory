@@ -1,13 +1,25 @@
 name: Publish
 
-# Runs when a GitHub release is published (including the automated ones from
-# release.yml). Builds from the release tag and publishes to npm with
-# provenance attestation. Requires the NPM_TOKEN repo secret (npm access
-# token, Automation kind).
+# npm publication for releases NOT cut through release.yml. A human editing
+# a release in the UI fires `release: published` and lands here; releases
+# created by CI publish inside release.yml itself (GitHub does not fire
+# `release` events for releases created with GITHUB_TOKEN).
+#
+# workflow_dispatch is the recovery lever: after fixing whatever failed
+# (e.g. adding the NPM_TOKEN secret), publish any released tag with
+#   gh workflow run publish.yml -f tag=v0.2.3
+#
+# Requires the NPM_TOKEN repo secret (npm access token, Automation kind).
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.2.3)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
 
       - uses: pnpm/action-setup@v4
 
