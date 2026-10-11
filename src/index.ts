@@ -1,5 +1,5 @@
 /**
- * dsh-shodh-memory — native shodh-memory integration for DeepSeek Harness.
+ * @louisremi/dsh-shodh-memory — native shodh-memory integration for DeepSeek Harness.
  *
  * shodh ships two integration paths: Claude Code hooks and an MCP server. Both
  * are wrong for this harness. The MCP path puts 51 tool schemas into every model
@@ -25,7 +25,7 @@
  * touching a dead server at all for a cooldown. With shodh down, the plugin is
  * indistinguishable from not being installed.
  *
- * @module dsh-shodh-memory
+ * @module '@louisremi/dsh-shodh-memory'
  */
 
 import { basename } from 'node:path';
@@ -182,7 +182,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
       state.capturedHashes.clear();
       state.injectedTurns.clear();
     },
-    'dsh-shodh-memory: teardown',
+    '@louisremi/dsh-shodh-memory: teardown',
   );
 
   ctx.logger?.info?.(

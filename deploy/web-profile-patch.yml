@@ -17,7 +17,7 @@
 # it does not deep-merge. So every field we want kept must be restated here;
 # anything omitted falls back to the plugin's own normalizeConfig() defaults in
 # src/config.js, not to the bundle's values. See the bundle layer in
-# dsh-shodh-memory/cordis.patch.yml for what each field does.
+# '@louisremi/dsh-shodh-memory'/cordis.patch.yml for what each field does.
 #
 # The API key is read from the SHODH_API_KEY env var (set on the
 # deepseek-harness container in docker-compose.yml, sourced from .env).

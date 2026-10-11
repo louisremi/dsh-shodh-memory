@@ -1,4 +1,4 @@
-# dsh-shodh-memory — bundle patch layer.
+# @louisremi/dsh-shodh-memory — bundle patch layer.
 #
 # Applied over the profile's existing entry list when this package is added with
 # `dsh plugin add <this-package>`. Later layers (another bundle, or the user's
@@ -64,7 +64,7 @@
 
 - insert:
     - id: shodh-memory
-      name: dsh-shodh-memory
+      name: '@louisremi/dsh-shodh-memory'
       config:
         baseUrl: !!js process.env.SHODH_API_URL ?? 'http://127.0.0.1:3030'
         apiKeyEnv: SHODH_API_KEY

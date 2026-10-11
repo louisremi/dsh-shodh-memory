@@ -1,4 +1,4 @@
-# dsh-shodh-memory
+# @louisremi/dsh-shodh-memory
 
 Persistent memory for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
 powered by [**shodh-memory**](https://github.com/varun29ankuS/shodh-memory) —
@@ -11,8 +11,8 @@ window**.
 > [varun29ankuS/shodh-memory](https://github.com/varun29ankuS/shodh-memory) —
 > see [Credits](#credits).
 
-**Install:** `dsh plugin --profile web add dsh-shodh-memory`
-(published to npm — [registry](https://www.npmjs.com/package/dsh-shodh-memory))
+**Install:** `dsh plugin --profile web add @louisremi/dsh-shodh-memory`
+(published to npm — [registry](https://www.npmjs.com/package/@louisremi/dsh-shodh-memory))
 
 ---
 
@@ -143,10 +143,10 @@ that's already loaded.
 
 ### The easy way — install from npm
 
-The plugin is published to npm as **`dsh-shodh-memory`**. One command:
+The plugin is published to npm as **`@louisremi/dsh-shodh-memory`**. One command:
 
 ```bash
-dsh plugin --profile web add dsh-shodh-memory
+dsh plugin --profile web add @louisremi/dsh-shodh-memory
 ```
 
 That's it. `dsh plugin add` installs the package into your profile's
@@ -158,7 +158,7 @@ the prompt section all come along. No build step, no manual wiring.
 Update to the latest version later with:
 
 ```bash
-dsh plugin --profile web update dsh-shodh-memory
+dsh plugin --profile web update @louisremi/dsh-shodh-memory
 ```
 
 The plugin has **no runtime dependencies**, so the install pulls in nothing
@@ -201,7 +201,7 @@ export SHODH_API_KEY=<key from shodh init>
 #### 3. Add the plugin to your profile
 
 ```bash
-dsh plugin --profile web add dsh-shodh-memory
+dsh plugin --profile web add @louisremi/dsh-shodh-memory
 ```
 
 From a local checkout (for development, instead of the npm package):
@@ -473,8 +473,12 @@ git tag v0.3.0 && git push origin v0.3.0
 
 CI then creates the GitHub release with notes generated from the commits
 since the previous tag, and publishes it to npm with provenance attestation
-(`NPM_TOKEN` repo secret is required; never publish from a laptop). If
-publication fails after the release is out, fix the cause and replay it with
+through npm Trusted Publishing (OIDC) — no `NPM_TOKEN` secret; the npm side
+needs `@louisremi/dsh-shodh-memory` registered with this repo's `release.yml`
+and `publish.yml` as trusted publishers. The publish job refuses a tag that
+does not match `package.json` and skips a version already on the registry, so
+re-running it is safe. Never publish from a laptop. If publication fails after
+the release is out, fix the cause and replay it with
 `gh workflow run publish.yml -f tag=v0.3.0`.
 
 ---
