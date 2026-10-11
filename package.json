@@ -1,6 +1,6 @@
 {
   "name": "@louisremi/dsh-shodh-memory",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Native shodh-memory integration for DeepSeek Harness — persistent cognitive memory without an MCP server in the context window.",
   "keywords": [
     "dsh",
@@ -12,6 +12,10 @@
     "no-mcp"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/louisremi/dsh-shodh-memory.git"
+  },
   "publishConfig": {
     "access": "public"
   },

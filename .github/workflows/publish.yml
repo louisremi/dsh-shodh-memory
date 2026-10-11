@@ -64,6 +64,14 @@ jobs:
             exit 1
           fi
 
+      - name: package.json repository must match this repo
+        run: |
+          url="$(node -p "require('./package.json').repository?.url || ''")"
+          if [ "$url" != "git+https://github.com/${GITHUB_REPOSITORY}.git" ]; then
+            echo "package.json repository.url '$url' != 'git+https://github.com/${GITHUB_REPOSITORY}.git' — npm would reject the provenance bundle with E422" >&2
+            exit 1
+          fi
+
       - name: Check whether the version is already on npm
         id: needs-publish
         run: |
