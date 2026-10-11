@@ -205,6 +205,18 @@ function fmt(template: unknown, args: unknown[]): string {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Poll a condition every 10ms; resolves true once satisfied, false after timeout.
+ * Capture writes reach the fake server asynchronously; fixed sleeps raced on
+ * loaded CI runners, so positive assertions wait on the actual effect. */
+async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (cond()) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(10);
+  }
+}
+
 // The harness-level events this test drives live in dsh's own service types,
 // not in bare cordis. The plugin registers its listeners through its own
 // structural ShodhContext interface, so the test only needs a matching
@@ -277,7 +289,7 @@ bus.emit(
     },
   },
 );
-await sleep(120);
+await waitFor(() => received.some((r) => r.url === '/api/remember'));
 const captured = received.filter((r) => r.url === '/api/remember');
 check('prompt was stored', captured.length === 1);
 check('stored as Conversation', captured[0]?.body?.memory_type === 'Conversation');
@@ -299,7 +311,9 @@ bus.emit(
     },
   },
 );
-await sleep(120);
+// Rejection is synchronous in the listener (source.kind !== 'user' returns
+// before any queueing), so a short settle is enough to prove nothing arrived.
+await sleep(50);
 check(
   'no feedback loop into the store',
   received.filter((r) => r.url === '/api/remember').length === 1,
@@ -321,7 +335,9 @@ bus.emit(
     error: { message: 'exit code 2' },
   },
 );
-await sleep(120);
+await waitFor(() =>
+  received.some((r) => r.url === '/api/remember' && r.body?.memory_type === 'Error'),
+);
 const errorMemories = received.filter(
   (r) => r.url === '/api/remember' && r.body?.memory_type === 'Error',
 );
@@ -491,9 +507,10 @@ for (let i = 0; i < 4; i += 1) {
     },
   );
 }
-await sleep(400);
+const breakerOpened = await waitFor(() => logs.some(([, m]) => m.includes('circuit open')), 5000);
+await sleep(50); // remaining queued writes short-circuit once the breaker is open
 check('failures did not crash the process', true);
-check('breaker opened after threshold', true);
+check('breaker opened after threshold', breakerOpened);
 const warnLogs = logs.filter(([, m]) => m.includes('circuit open'));
 check('breaker logged a warning', warnLogs.length >= 1);
 
