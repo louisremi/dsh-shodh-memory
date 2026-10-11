@@ -5,10 +5,10 @@ Read this before changing anything.
 
 ## Changes go through pull requests — always
 
-**Never push directly to `master`.** Every change to this repository — code,
+**Never push directly to `main`.** Every change to this repository — code,
 tests, docs, CI, config — must land through a pull request:
 
-1. Branch from `master` (e.g. `fix/recall-budget`, `chore/bump-deps`).
+1. Branch from `main` (e.g. `fix/recall-budget`, `chore/bump-deps`).
 2. Commit and push the branch.
 3. Open a PR: `gh pr create` with a title and a body that says *what* changed
    and *why*.
@@ -16,7 +16,7 @@ tests, docs, CI, config — must land through a pull request:
    merge).
 5. Merge with `gh pr merge` (squash or merge, matching the work).
 
-`master` has branch protection that rejects direct pushes. Do not work around
+`main` has branch protection that rejects direct pushes. Do not work around
 it — if a push is rejected, the process above is the fix, not a force-push or
 a protection change.
 

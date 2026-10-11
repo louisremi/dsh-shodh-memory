@@ -456,9 +456,9 @@ client and the running binary agree. If a future server version changes a shape,
 
 ### Contributing
 
-All changes land through pull requests. `master` is protected: direct pushes
+All changes land through pull requests. `main` is protected: direct pushes
 are rejected and PRs merge only after CI goes green (`.github/workflows/`:
-lint, typecheck, build, test). Branch from `master`, push, open a PR with
+lint, typecheck, build, test). Branch from `main`, push, open a PR with
 `gh pr create`, merge once checks pass. The same rules are spelled out for
 coding agents in [AGENTS.md](AGENTS.md).
 
