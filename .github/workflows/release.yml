@@ -8,6 +8,11 @@ name: Release
 # release created here) do NOT trigger other workflows, so `on: release` in
 # publish.yml can never see automation-cut releases. publish.yml remains the
 # path for human-published releases and the recovery lever for this chain.
+#
+# npm publication uses Trusted Publishing (OIDC): id-token: write below, and
+# `@louisremi/dsh-shodh-memory` registered on npmjs.com with this repo and
+# workflow file as a trusted publisher. There is no NPM_TOKEN secret — do
+# not add one.
 
 on:
   push:
@@ -43,7 +48,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -55,7 +60,26 @@ jobs:
       - name: Test (builds dist/)
         run: pnpm test
 
-      - name: Publish to npm
+      - name: Release tag must match package.json version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "Release tag '$GITHUB_REF_NAME' does not match package.json version '$version'" >&2
+            exit 1
+          fi
+
+      - name: Check whether the version is already on npm
+        id: needs-publish
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version is already in the registry; skipping publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.needs-publish.outputs.publish == 'true'
+        name: Publish to npm (Trusted Publishing / OIDC)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

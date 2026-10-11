@@ -24,7 +24,7 @@
         chmod 700 /shodh-data
 
   # Added 2026-09-19: shodh-memory, the persistent memory server backing the
-  # `dsh-shodh-memory` plugin in the deepseek-harness container above.
+  # `@louisremi/dsh-shodh-memory` plugin in the deepseek-harness container above.
   #
   # Native plugin, not MCP: shodh's own MCP surface exposes 51 tool definitions
   # (~7.5k tokens of standing context on every request). The dsh plugin talks to

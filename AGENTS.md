@@ -1,4 +1,4 @@
-# AGENTS.md — working rules for dsh-shodh-memory
+# AGENTS.md — working rules for @louisremi/dsh-shodh-memory
 
 Instructions for coding agents (and humans) working in this repository.
 Read this before changing anything.
@@ -54,13 +54,17 @@ pnpm test        # build + typecheck + format suite + smoke suite
 - **The published artifact is `dist/`.** Entry is `dist/index.js` via
   `exports`; `test/overlay.yml` and `deploy/*.mjs` also point there. After
   changing sources, rebuild before booting through the overlay.
-- **Secrets never get committed.** The npm token lives in repo secrets
-  (`NPM_TOKEN`) and `~/.npmrc` — never in a file in this repo.
+- **Secrets never get committed.** npm publication goes through Trusted
+  Publishing (OIDC, `id-token: write`) — this repo holds **no npm token at
+  all**, in secrets or anywhere else. Do not add an `NPM_TOKEN`.
 - **Node >= 18 is a supported runtime** (`engines`). Keep build targets at
   ES2022.
 
 ## Releasing
 
 Releases are automated: pushing a `v*` tag creates the GitHub release with
-generated notes from the commits since the last tag, and a published release
-is published to npm by CI. Do not hand-roll `npm publish` from a laptop.
+generated notes from the commits since the last tag, and the release is
+published to npm by CI under the `@louisremi` scope, via Trusted Publishing
+(OIDC). The tag must match the `package.json` version — CI enforces it — so
+cut a release by bumping the version through a PR, then tagging. Do not
+hand-roll `npm publish` from a laptop.
