@@ -1,0 +1,42 @@
+version: 2
+updates:
+  # pnpm is served by the npm ecosystem: GitHub maps pnpm v7-v10 to
+  # `package-ecosystem: npm`. All six dependencies here are dev/peer - the
+  # published dist/ has zero runtime deps - so bumps change nothing consumers
+  # install. `skip-changelog` keeps them out of generated release notes (see
+  # .github/release.yml); `dependencies` is spelled out because defining
+  # `labels` replaces the automatic defaults.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+      - skip-changelog
+    groups:
+      toolchain:
+        patterns:
+          - typescript
+          - "@types/node"
+          - "@biomejs/biome"
+        dependency-type: development
+      deepseek-harness:
+        patterns:
+          - "@deepseek-ai/*"
+        dependency-type: development
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - github_actions
+      - skip-changelog

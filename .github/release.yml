@@ -1,0 +1,17 @@
+# Categorisation for the notes that `gh release create --generate-notes`
+# generates in .github/workflows/release.yml. Dependency bumps carry
+# skip-changelog (see .github/dependabot.yml), so they stay out of the notes.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Other changes
+      labels:
+        - "*"
