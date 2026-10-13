@@ -60,6 +60,27 @@ pnpm test        # build + typecheck + format suite + smoke suite
 - **Node >= 18 is a supported runtime** (`engines`). Keep build targets at
   ES2022.
 
+## Dependency updates
+
+Dependabot (`.github/dependabot.yml`) opens PRs every Monday — `npm` for the
+pnpm lockfile, `github-actions` for the workflows — and those PRs follow the
+same rules as everything else above: they get reviewed by CI, never pushed.
+
+- **Dev-dependency PRs merge themselves.** `auto-merge.yml` queues any PR
+  whose changes are development dependencies only for squash-merge; the
+  required `check` still gates it. Everything else — Actions bumps, any
+  production or peer dependency change — waits for a human.
+- **`@deepseek-ai/*` pins may float to alphas.** They are prereleases, so
+  Dependabot proposes prereleases and auto-merge lands them when the smoke
+  suite passes. Retargeting the `@deepseek-ai/cordis` **peer** range at a new
+  harness line is still a human decision.
+- **Bumps stay out of the release notes.** Dependency PRs carry
+  `skip-changelog`, which `.github/release.yml` excludes.
+- **The ecosystem is `npm`, not `pnpm`** — GitHub has no `pnpm` value and
+  supports pnpm v7–v10. Re-check Dependabot support before moving
+  `packageManager` past 10. And because `@deepseek-ai/*` are public packages,
+  updates need no `registries:` credentials block: no `NPM_TOKEN`, ever.
+
 ## Releasing
 
 Releases are automated: pushing a `v*` tag creates the GitHub release with
