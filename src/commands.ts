@@ -11,6 +11,7 @@
 import type { ShodhClient } from './client.js';
 import { normalizeMemory } from './format.js';
 import type { TenantResolver } from './tools.js';
+import type { Tui } from './tui.js';
 import type {
   ActivityCounters,
   CommandInvocation,
@@ -33,6 +34,8 @@ export interface CommandDeps {
   state: PluginState;
   /** Tenant resolver. */
   resolveUserId: TenantResolver;
+  /** The `/shodh tui` verb. */
+  tui: Tui;
 }
 
 /**
@@ -42,11 +45,11 @@ export interface CommandDeps {
  * @returns a disposer unregistering the command.
  */
 export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => void {
-  const { client, cfg, state, resolveUserId } = deps;
+  const { client, cfg, state, resolveUserId, tui } = deps;
   return ctx.commands.register({
     name: 'shodh',
-    description: 'shodh-memory: status, save, search, summary, forget',
-    input: { hint: '[status | save <text> | search <query> | summary | forget <id>]' },
+    description: 'shodh-memory: status, save, search, summary, forget, tui',
+    input: { hint: '[status | save <text> | search <query> | summary | forget <id> | tui]' },
     async handler(invocation: CommandInvocation): Promise<CommandResult> {
       const input = (invocation.rawInput ?? '').trim();
       const [verb = 'status'] = input.split(/\s+/);
@@ -66,6 +69,8 @@ export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => voi
         case 'forget':
         case 'delete':
           return forgetResult(client, argument, userId);
+        case 'tui':
+          return tui.run(invocation, argument);
         case 'help':
         case '--help':
           return { kind: 'success', text: HELP };
@@ -82,6 +87,8 @@ const HELP = [
   '/shodh search <query>    Semantic search across all sessions',
   '/shodh summary           Recent decisions, learnings, and context',
   '/shodh forget <id>       Delete one memory',
+  '/shodh tui               Open the shodh dashboard in the right panel',
+  '/shodh tui install       Download the shodh-tui binary it runs',
 ].join('\n');
 
 /**

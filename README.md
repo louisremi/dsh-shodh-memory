@@ -117,10 +117,45 @@ Human-facing control that costs the model nothing:
 /shodh search <query>    Semantic search across all sessions   (alias: find)
 /shodh summary           Recent decisions, learnings, and context
 /shodh forget <id>       Delete one memory                     (alias: delete)
+/shodh tui               Open the shodh dashboard in the right panel
+/shodh tui install       Download the shodh-tui binary it runs
 /shodh help              Usage
 ```
 
 Bare `/shodh` runs `status`.
+
+### The shodh TUI in the right panel
+
+shodh-memory ships a terminal dashboard, `shodh-tui`, that shows what the engine
+stores, how memories link, and what a recall returns. `/shodh tui` runs that
+binary, unmodified, in a terminal tab of the DSH right sidebar, already pointed
+at the server and API key this plugin is configured with.
+
+```
+/shodh tui install       once: fetch the binary matching your server version
+/shodh tui               open the dashboard
+```
+
+- **It is upstream's program, not a port.** Nothing of the TUI lives in this
+  repository. When upstream changes it, install the newer release
+  (`/shodh tui install v0.3.0`); there is no code here to update.
+- **Web and Desktop only.** It uses DSH's sidebar terminal, which a headless
+  profile does not have. There, `/shodh tui` reports an error and the rest of
+  the plugin is unaffected.
+- **Costs the model nothing.** No tool and no prompt text is added.
+- **Pick your profile.** The TUI opens on its own profile selector. The command
+  result names the tenant this session writes to (for example `dsh-my-project`).
+- **One per session.** A second `/shodh tui` points at the open tab. Quit the
+  TUI with `q` and the terminal ends; run the command again for a new one.
+
+The tab carries an "Agent" badge until your first keypress, because DSH treats a
+terminal a plugin opened like one the agent opened. Typing into it makes it
+yours; from then on the plugin no longer closes it on reload.
+
+`/shodh tui install` is the only thing in this plugin that contacts anything
+other than your shodh server — see [Privacy](#privacy-and-data-locality).
+To avoid it, build or download `shodh-tui` yourself and set `tui.path`, or put
+it on `PATH`.
 
 ---
 
@@ -128,7 +163,7 @@ Bare `/shodh` runs `status`.
 
 | | |
 |---|---|
-| **DeepSeek Harness** | `dsh` 0.1.6-alpha.1 (developed against; earlier 0.1.x should work) |
+| **DeepSeek Harness** | `dsh` 0.1.6-alpha.1 (developed against; earlier 0.1.x should work). `/shodh tui` needs the Web or Desktop app (built against the terminal controller in 0.2.2-rc.2) |
 | **shodh-memory** | Any build exposing the HTTP API — binary, Docker, or `shodh server` |
 | **Node.js** | ≥ 18 (uses the global `fetch`) |
 | **pnpm** | Required only for `dsh plugin add` |
@@ -332,6 +367,10 @@ by targeting the row `id: shodh-memory` in `$DSH_HOME/cordis.patch.yml` or a
 | `tools.*` | all `true` | Each toggle saves ~120 tok per request |
 | `tools.searchResultMaxChars` | `0` | Per-result cap on `memory_search` output. `0` = full text; only raise it to force a hard display budget |
 | `promptSection` | `true` | The ~150 tok usage-guidance section |
+| `tui.enabled` | `true` | Off = `/shodh tui` reports that it is switched off |
+| `tui.path` | `''` | Absolute path to a `shodh-tui` binary. Empty = the managed install, then `PATH` |
+| `tui.version` | `''` | Release tag to install and prefer (`v0.2.0`). Empty = the server's version |
+| `tui.cols`, `tui.rows` | `120`, `36` | Initial grid; the sidebar refits it to the panel |
 | `failureCooldownMs` | `30000` | How long a dead server is ignored before a probe |
 
 ### Recommended: per-project memory
@@ -347,9 +386,16 @@ setting most coding users should turn on.
 
 ## Privacy and data locality
 
-Nothing in this plugin sends data anywhere that shodh itself would not.
+Nothing in this plugin sends data anywhere that shodh itself would not, with one
+exception you trigger by hand:
 
-- All traffic is to your configured `baseUrl` — loopback by default.
+- **`/shodh tui install` downloads from GitHub.** It reads the release metadata
+  from `api.github.com`, downloads that release's archive for your platform,
+  refuses it unless it matches the sha256 GitHub publishes, and keeps one file
+  from it (`shodh-tui`) under `$DSH_HOME/plugins/shodh-memory/tui/`. It sends
+  nothing but the request itself. It never runs on its own: not at startup, not
+  on a turn, not from `/shodh tui`.
+- All other traffic is to your configured `baseUrl` — loopback by default.
 - No telemetry, no analytics, no third-party endpoints.
 - The plugin stores no data of its own; the memory lives in shodh's store.
 - shodh-memory is local-first and runs with no LLM in the loop and no cloud
@@ -399,6 +445,27 @@ Memories scoring below 0.2 relevance are already filtered out.
 Check `autoCapture.enabled`, and that `minChars` isn't above your typical
 prompt length (default 24).
 
+**`/shodh tui`: "needs a sidebar terminal"**
+You are in a headless profile, or on a DSH release older than the sidebar
+terminal. The TUI needs the Web or Desktop app.
+
+**`/shodh tui`: "exited as soon as it started"**
+The message under it is what the terminal printed. `GLIBC_2.xx not found` means
+the release binary is newer than your system's C library — upstream's v0.2.0
+Linux builds need glibc 2.39 (x64) or 2.34 (arm64). Build `shodh-tui` from the
+shodh-memory repository (`cd tui && cargo build --release`) and set `tui.path`.
+`No such file or directory` for a file that exists means the session's sandbox
+hides it: on Linux a sandboxed terminal gets its own empty `/tmp` and `/dev`, so
+keep the binary (and `DSH_HOME`) out of `/tmp` and `/dev/shm`.
+
+**The TUI shows "Cannot connect"**
+It reaches the server from the machine running DSH, with the plugin's `baseUrl`
+and key. Check `/shodh status`; if that is healthy the TUI will be too.
+
+**The TUI is empty**
+Pick the profile `/shodh tui` named. Under `userIdScope: workspace` each project
+has its own.
+
 **`duplicate bundle id` on boot**
 The `shodh-memory` row was added both by the bundle and manually to your
 profile patch. Remove the manual one.
@@ -420,12 +487,18 @@ injected block fails here even if search output looks right.
 
 The smoke test boots a real cordis context with stub services against a fake
 shodh HTTP server, then drives the same events the harness would and asserts on
-what actually reached the wire — the contract, not the internals. 50 checks
+what actually reached the wire — the contract, not the internals. 65 checks
 covering capture, the no-feedback-loop guarantee, recall budgeting and reuse
 gap, all three tools (including that a long memory survives `memory_search`'s
-render whole), the slash command, circuit-breaker behaviour, tenant scoping, and
-that tool output schemas are plain JSON Schema rather than schemastery instances
-(which the registry rejects).
+render whole), the slash command including `/shodh tui`, circuit-breaker
+behaviour, tenant scoping, and that tool output schemas are plain JSON Schema
+rather than schemastery instances (which the registry rejects).
+
+Two more suites cover the TUI. `tui-install.test.ts` plays GitHub with a local
+HTTP server and a tar.gz built in memory, and pins that a digest mismatch or a
+missing digest installs nothing and that only `shodh-tui` ever reaches the disk.
+`tui.test.ts` drives `/shodh tui` against a fake sidebar terminal and pins the
+launch request, the one line typed into the shell, and every refusal.
 
 To boot the plugin inside a real harness without publishing it:
 
@@ -453,6 +526,14 @@ and a real cordis `Context` boot registered `memory_save`, `memory_search`,
 `memory_forget`, the `/shodh` command, and the prompt section. The reference
 client and the running binary agree. If a future server version changes a shape,
 `src/client.ts` is still the single place to adjust.
+
+**`/shodh tui` as of v0.3.0.** Run outside the test suite against the real
+terminal controller, PTY provider, and Linux sandbox of dsh 0.2.2-rc.2, with the
+real v0.2.0 arm64 `shodh-tui`: install from GitHub, launch, the profile selector
+rendering, quitting with `q`, and the same under `workspace-write` and
+`read-only` sandbox modes. **Not yet exercised:** the tab in a browser, and the
+dashboard itself against a server that has memories — the run above had no shodh
+server, so it stopped at the selector's "Cannot connect".
 
 ### Contributing
 
@@ -530,10 +611,14 @@ src/
   recall.ts         turn prompt → /api/recall → injected block
   tools.ts          memory_save / memory_search / memory_forget
   commands.ts       /shodh
+  tui.ts            /shodh tui — upstream's dashboard in a sidebar terminal
+  tui-install.ts    /shodh tui install — verified download of shodh-tui
 test/
-  format.test.ts    24-check unit test for the two rendering budgets
-  smoke.test.ts     50-check end-to-end test against a fake shodh
-  overlay.yml       dev overlay for booting inside a real harness
+  format.test.ts       24-check unit test for the two rendering budgets
+  tui-install.test.ts  40-check test of the download, digest check, and unpack
+  tui.test.ts          82-check test of /shodh tui against a fake terminal
+  smoke.test.ts        65-check end-to-end test against a fake shodh
+  overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
 .github/workflows/    CI, plus release automation (tag → release → npm)
 docs/

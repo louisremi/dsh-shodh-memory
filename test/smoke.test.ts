@@ -14,7 +14,13 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Context, type Plugin, Service } from '@deepseek-ai/cordis';
 import { ShodhClient } from '../src/client.js';
-import type { CommandDefinition, JsonRecord, PromptSection, ToolDefinition } from '../src/types.js';
+import type {
+  AgentTerminalRequestLike,
+  CommandDefinition,
+  JsonRecord,
+  PromptSection,
+  ToolDefinition,
+} from '../src/types.js';
 
 // ── fake shodh server ────────────────────────────────────────────────────────
 
@@ -195,6 +201,9 @@ await ctx.plugin(entry, {
   captureTimeoutMs: 2000,
   failureThreshold: 3,
   failureCooldownMs: 5000,
+  // Any absolute executable will do: the terminal below is a stub and never
+  // runs it. This only has to get past binary resolution.
+  tui: { path: process.execPath },
 });
 
 function fmt(template: unknown, args: unknown[]): string {
@@ -482,6 +491,80 @@ const summaryOut = await command.handler({ rawInput: 'summary', agent: {} });
 check('/shodh summary lists decisions', summaryOut.text.includes('Decisions:'));
 const badOut = await command.handler({ rawInput: 'bogus', agent: {} });
 check('unknown subcommand errors', badOut.kind === 'error');
+const helpOut = await command.handler({ rawInput: 'help', agent: {} });
+check('help lists the tui verb', helpOut.text.includes('/shodh tui '));
+check('help lists tui install', helpOut.text.includes('/shodh tui install'));
+check('the input hint offers tui', Boolean(command.input?.hint?.includes('| tui]')));
+
+console.log('\n[9b] /shodh tui');
+// The plugin booted above with no terminal services, as a headless profile
+// does — and everything before this line worked. Only this verb says no.
+const tuiHeadless = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
+check('without terminal services /shodh tui errors', tuiHeadless.kind === 'error');
+check('…and says where it works', tuiHeadless.text.includes('Web and Desktop'));
+
+// The Web and Desktop apps provide the two services. They are looked up when
+// the command runs, so registering them now — after the plugin started, and
+// without either being in its `inject` — is exactly the production order.
+const terminalRequests: AgentTerminalRequestLike[] = [];
+const terminalWrites: string[] = [];
+let terminalClosed = false;
+class TerminalControllerStub extends Service {
+  openForAgent!: (agent: unknown, request: AgentTerminalRequestLike) => Promise<unknown>;
+  constructor(ctx: Context) {
+    super(ctx, 'terminalController');
+    this.openForAgent = async (_agent, request) => {
+      terminalRequests.push(request);
+      return {
+        info: { state: 'running', control: 'agent', exitCode: null },
+        revision: 1,
+        // Nothing more is ever printed: resolve only when the wait is aborted.
+        changed: (_after: number, signal: AbortSignal) =>
+          new Promise<number>((resolve) => {
+            signal.addEventListener('abort', () => resolve(1), { once: true });
+          }),
+        write: async (data: string) => {
+          terminalWrites.push(data);
+        },
+        drain: async () => {},
+        read: () => ({ text: 'user@host:~$ ' }),
+        close: async () => {
+          terminalClosed = true;
+        },
+      };
+    };
+  }
+}
+class SandboxPolicyStub extends Service {
+  resolve!: (request: { session?: unknown }) => unknown;
+  constructor(ctx: Context) {
+    super(ctx, 'sandboxPolicy');
+    this.resolve = () => ({ mode: 'workspace-write' });
+  }
+}
+new TerminalControllerStub(ctx);
+new SandboxPolicyStub(ctx);
+
+const tuiOut = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
+check('with terminal services /shodh tui succeeds', tuiOut.kind === 'success');
+check('one sidebar terminal requested', terminalRequests.length === 1);
+check('titled "Shodh memory"', terminalRequests[0]?.title === 'Shodh memory');
+check(
+  'the TUI is pointed at the configured server',
+  terminalRequests[0]?.env?.SHODH_SERVER_URL === baseUrl,
+);
+check(
+  "the plugin's API key reaches it",
+  terminalRequests[0]?.env?.SHODH_API_KEY === 'test-key-123',
+);
+check(
+  'one line is typed: exec the binary',
+  terminalWrites.length === 1 && terminalWrites[0] === ` exec '${process.execPath}' || exit 127\r`,
+);
+check('the result names the tenant to pick', tuiOut.text.includes('"dsh"'));
+const tuiAgain = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
+check('a second /shodh tui opens nothing new', terminalRequests.length === 1);
+check('…and says it is already open', tuiAgain.text.includes('already open'));
 
 console.log('\n[10] resilience: circuit breaker');
 failNext = 20;
@@ -568,8 +651,9 @@ check('default tenant used when no override', tenantA?.body?.user_id === 'dsh:de
 check('per-call override wins', tenantB?.body?.user_id === 'dsh:other-project');
 check('uid() falls back to the process default', scoped.uid(undefined) === 'dsh:default-project');
 
-console.log(`\n${passed} checks passed.\n`);
-
 await ctx.fiber.dispose();
+console.log('\n[13] teardown');
+check('disposing the plugin closes the TUI terminal it still controls', terminalClosed);
+console.log(`\n${passed} checks passed.\n`);
 server.close();
 process.exit(0);
