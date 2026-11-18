@@ -24,3 +24,6 @@ build/
 # Agent skills installed locally (npx skills add …), not shared yet.
 .agents/
 skills-lock.json
+
+# Scratch for local container builds (docker config, downloads).
+.local/

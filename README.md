@@ -543,6 +543,34 @@ rejects without consulting `package.json`. The `dsh plugin add` path is
 unaffected — it installs into the profile's `node_modules` and resolves by name
 through `exports`.
 
+### A local shodh server for manual testing
+
+`dev/shodh-local/` runs a real shodh-memory 0.2.0 server in Docker, bound to
+loopback only, so the plugin can be tested end to end in a live harness:
+
+```bash
+docker compose -f dev/shodh-local/compose.yml up -d --build
+curl -fsS http://127.0.0.1:3030/health
+```
+
+The image is built from the official GitHub release tarball for the build
+machine's architecture, checked against pinned sha256 digests. Upstream's
+`varunshodh/shodh-memory` image is published for amd64 only. The API key is a
+throwaway `sk-shodh-local-dev` unless `SHODH_API_KEY` is set. Data lives in the
+`shodh-local_shodh-data` volume; `docker compose … down -v` wipes it.
+
+To point a profile at it, install this checkout and then the dev override
+bundle. The override restates the plugin row with `baseUrl:
+http://127.0.0.1:3030`, the dev key, and `userIdScope: workspace`:
+
+```bash
+dsh plugin --profile <name> add "$PWD"                      # or Plugins > Add plugin
+dsh plugin --profile <name> add "$PWD/dev/shodh-local/overlay"
+```
+
+Both are linked, not copied. After changing `src/`, run `pnpm build` and
+restart `dsh web`. Remove the override bundle to go back to the plugin defaults.
+
 ### Testing status — please read
 
 The wire shapes in this plugin were derived by reading the **official

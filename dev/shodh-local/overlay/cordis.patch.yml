@@ -1,0 +1,44 @@
+# Dev-only override for the `shodh-memory` row inserted by
+# @louisremi/dsh-shodh-memory. Points it at dev/shodh-local/compose.yml.
+#
+# A patch replaces the row's whole `config`, so every field is restated. The
+# key is the compose file's throwaway default (loopback-only server); export
+# SHODH_API_KEY before `docker compose up` and `dsh web` to use another.
+- id: shodh-memory
+  config:
+    baseUrl: http://127.0.0.1:3030
+    apiKeyEnv: SHODH_API_KEY
+    apiKey: !!js process.env.SHODH_API_KEY || 'sk-shodh-local-dev'
+    userId: dsh
+    userIdScope: workspace
+    requestTimeoutMs: 3000
+    recallTimeoutMs: 1500
+    captureTimeoutMs: 4000
+    failureThreshold: 3
+    failureCooldownMs: 30000
+    tools:
+      save: true
+      search: true
+      forget: true
+      searchResultMaxChars: 0
+    autoRecall:
+      enabled: true
+      maxChars: 1200
+      maxResults: 5
+      minPromptChars: 12
+      reuseGapTurns: 8
+      queryChars: 500
+    autoCapture:
+      enabled: true
+      userPrompts: true
+      toolErrors: true
+      assistantReplies: false
+      maxChars: 900
+      minChars: 24
+    promptSection: true
+    tui:
+      enabled: true
+      path: ''
+      version: ''
+      cols: 120
+      rows: 36

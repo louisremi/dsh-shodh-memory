@@ -1,0 +1,27 @@
+# Local shodh-memory for developing and testing @louisremi/dsh-shodh-memory.
+#
+#   docker compose -f dev/shodh-local/compose.yml up -d --build
+#   curl -fsS http://127.0.0.1:3030/health
+#
+# Published on loopback only: the store holds every captured prompt.
+# The API key is a throwaway dev key unless SHODH_API_KEY is set; the plugin
+# reads the same variable (its `apiKeyEnv` default), so export it in the shell
+# that starts `dsh web`.
+name: shodh-local
+
+services:
+  shodh-memory:
+    build:
+      context: .
+    image: shodh-memory-local:0.2.0
+    container_name: shodh-memory-local
+    restart: unless-stopped
+    environment:
+      SHODH_API_KEYS: ${SHODH_API_KEY:-sk-shodh-local-dev}
+    ports:
+      - "127.0.0.1:${SHODH_PORT:-3030}:3030"
+    volumes:
+      - shodh-data:/data
+
+volumes:
+  shodh-data:

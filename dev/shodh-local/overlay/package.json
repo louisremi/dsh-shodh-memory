@@ -1,0 +1,14 @@
+{
+  "name": "@louisremi/dsh-shodh-memory-local-dev",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev-only: points the shodh-memory plugin at the local container from dev/shodh-local.",
+  "exports": {
+    "./locale/*.json": "./locale/*.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

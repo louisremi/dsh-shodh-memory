@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Shodh memory (local dev server)",
+    "description": "Dev-only override: points the shodh-memory plugin at the local container started from dev/shodh-local/compose.yml, using its throwaway API key. Remove this bundle to go back to the plugin defaults."
+  }
+}
