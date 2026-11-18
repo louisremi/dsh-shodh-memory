@@ -136,6 +136,11 @@ at the server and API key this plugin is configured with.
 /shodh tui               open the dashboard
 ```
 
+In the Web app, the right panel's start page also gets a **Shodh memory** card
+beside **New terminal**. Clicking it runs `/shodh tui` for the session, and if
+the command fails, its message appears on the card. The card lives in
+`client/index.js`, a small hand-written browser module with no build step.
+
 - **It is upstream's program, not a port.** Nothing of the TUI lives in this
   repository. When upstream changes it, install the newer release
   (`/shodh tui install v0.3.0`); there is no code here to update.
@@ -597,7 +602,7 @@ should never stop the harness from booting.
 ## Project layout
 
 ```
-package.json          dsh.bundle declaration
+package.json          dsh.bundle and dsh.client declarations
 tsconfig.json         strict TypeScript; build emits dist/ with types
 biome.json            lint + format (Biome), whole repo clean
 cordis.patch.yml      the bundle layer, fully commented
@@ -613,10 +618,13 @@ src/
   commands.ts       /shodh
   tui.ts            /shodh tui — upstream's dashboard in a sidebar terminal
   tui-install.ts    /shodh tui install — verified download of shodh-tui
+client/
+  index.js          the right panel's "Shodh memory" card (browser, no build)
 test/
   format.test.ts       24-check unit test for the two rendering budgets
   tui-install.test.ts  40-check test of the download, digest check, and unpack
   tui.test.ts          83-check test of /shodh tui against a fake terminal
+  client.test.ts       16-check test of the card's registration and command
   smoke.test.ts        66-check end-to-end test against a fake shodh
   overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
