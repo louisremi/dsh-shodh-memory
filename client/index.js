@@ -2,7 +2,9 @@
  * Browser half of @louisremi/dsh-shodh-memory: a "Shodh memory" card on the
  * right panel's start page. Clicking it runs `/shodh tui` for the session,
  * exactly as typing it would; the Host then opens the TUI in a terminal tab.
- * A failure shows the command's message on the card; when the failure is a
+ * The command's reply (which profile to pick, or why it failed) is shown on
+ * the card, as typing the command would show it in the conversation. When the
+ * failure is a
  * missing binary, the card also offers Install, which runs `/shodh tui install`
  * and then opens the TUI.
  *
@@ -33,20 +35,24 @@
   };
 
   /**
-   * Run one Host command and reduce the outcome to an error message, if any.
+   * Run one Host command and reduce the response to what the card shows.
    * @param {(line: string) => Promise<any>} execute - session-bound `remote.commands.execute`.
    * @param {string} line - the command line.
-   * @returns {Promise<string | undefined>} the error text, or undefined on success.
+   * @returns {Promise<{ ok: boolean, text: string }>} success or failure, and the
+   *   command's reply (empty when a successful command said nothing).
    */
   async function run(execute, line) {
+    const failed = (text) => ({ ok: false, text: text || 'The command failed.' });
     try {
       const response = await execute(line);
-      if (response?.ok !== true) return response?.error?.message || 'The command failed.';
+      if (response?.ok !== true) return failed(response?.error?.message);
       const result = response.value?.result;
-      if (!result) return 'The /shodh command is not available in this session.';
-      return result.kind === 'success' ? undefined : result.text || 'The command failed.';
+      if (!result) return failed('The /shodh command is not available in this session.');
+      return result.kind === 'success'
+        ? { ok: true, text: result.text ?? '' }
+        : failed(result.text);
     } catch (error) {
-      return typeof error?.message === 'string' ? error.message : String(error);
+      return failed(typeof error?.message === 'string' ? error.message : String(error));
     }
   }
 
@@ -54,22 +60,22 @@
    * Open the TUI, installing it first when asked.
    * @param {(line: string) => Promise<any>} execute - session-bound command runner.
    * @param {boolean} install - run `/shodh tui install` first.
-   * @returns {Promise<string | undefined>} the error text, or undefined on success.
+   * @returns {Promise<{ ok: boolean, text: string }>} the outcome of the last command run.
    */
   async function openTui(execute, install) {
     if (install) {
-      const failed = await run(execute, INSTALL);
-      if (failed) return failed;
+      const installed = await run(execute, INSTALL);
+      if (!installed.ok) return installed;
     }
     return run(execute, OPEN);
   }
 
   /**
-   * @param {string | undefined} error - text from {@link openTui}.
-   * @returns {boolean} whether it reports a missing binary.
+   * @param {{ ok: boolean, text: string } | undefined} outcome - from {@link openTui}.
+   * @returns {boolean} whether it failed for want of a binary.
    */
-  function isMissingBinary(error) {
-    return typeof error === 'string' && error.startsWith(MISSING_BINARY);
+  function isMissingBinary(outcome) {
+    return outcome?.ok === false && outcome.text.startsWith(MISSING_BINARY);
   }
 
   root.__ModuleLoader__.load({
@@ -112,7 +118,8 @@
 .shodh-tui-install:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .shodh-tui-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.4}
 .shodh-tui-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.4}
-.shodh-tui-error{color:var(--dsw-alias-label-error);white-space:pre-wrap;overflow-wrap:anywhere}`;
+.shodh-tui-reply{white-space:pre-wrap;overflow-wrap:anywhere}
+.shodh-tui-error{color:var(--dsw-alias-label-error)}`;
 
       /**
        * The start-page card: one click, one `/shodh tui`. When that fails for
@@ -121,17 +128,24 @@
       function TuiCard({ title, description, execute }) {
         /** `undefined` when idle, else `'starting'` or `'installing'`. */
         const [busy, setBusy] = React.useState(undefined);
-        const [error, setError] = React.useState(undefined);
+        /** The last command reply, `{ ok, text }`, until the next click. */
+        const [outcome, setOutcome] = React.useState(undefined);
         const start = (install) => {
           if (busy || !execute) return;
           setBusy(install ? 'installing' : 'starting');
-          setError(undefined);
-          void openTui(execute, install).then((message) => {
+          setOutcome(undefined);
+          void openTui(execute, install).then((next) => {
             setBusy(undefined);
-            setError(message);
+            setOutcome(next);
           });
         };
-        const sub = busy ? en[busy] : (error ?? description);
+        const reply = !busy && outcome?.text ? outcome : undefined;
+        const sub = busy ? en[busy] : (reply?.text ?? description);
+        const subClass = !reply
+          ? 'shodh-tui-sub'
+          : reply.ok
+            ? 'shodh-tui-sub shodh-tui-reply'
+            : 'shodh-tui-sub shodh-tui-reply shodh-tui-error';
         return h(
           'div',
           { className: 'shodh-tui-card', 'aria-busy': busy !== undefined },
@@ -152,14 +166,14 @@
               h(
                 'span',
                 {
-                  className: error ? 'shodh-tui-sub shodh-tui-error' : 'shodh-tui-sub',
+                  className: subClass,
                   role: 'status',
                 },
                 sub,
               ),
           ),
           !busy &&
-            isMissingBinary(error) &&
+            isMissingBinary(outcome) &&
             h(
               'button',
               { type: 'button', className: 'shodh-tui-install', onClick: () => start(true) },

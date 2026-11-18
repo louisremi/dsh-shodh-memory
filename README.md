@@ -137,8 +137,9 @@ at the server and API key this plugin is configured with.
 ```
 
 In the Web app, the right panel's start page also gets a **Shodh memory** card
-beside **New terminal**. Clicking it runs `/shodh tui` for the session, and if
-the command fails, its message appears on the card. When the binary is not
+beside **New terminal**. Clicking it runs `/shodh tui` for the session and shows
+the command's reply on the card: which profile to pick in the TUI, or why it
+failed. When the binary is not
 installed yet, the card also shows **Install**, which runs `/shodh tui install`
 and then opens the TUI. The card lives in
 `client/index.js`, a small hand-written browser module with no build step.
@@ -627,7 +628,7 @@ test/
   format.test.ts       24-check unit test for the two rendering budgets
   tui-install.test.ts  39-check test of the download, digest check, and unpack
   tui.test.ts          84-check test of /shodh tui against a fake terminal
-  client.test.ts       23-check test of the card's commands and Install offer
+  client.test.ts       27-check test of the card's commands, replies, and Install offer
   smoke.test.ts        66-check end-to-end test against a fake shodh
   overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
