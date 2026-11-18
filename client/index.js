@@ -13,6 +13,10 @@
   const TYPE_ID = `${PACKAGE}/tui`;
   const KIND = 'shodh-tui';
   const COMMAND = '/shodh tui';
+  /** rgb(240, 136, 62). */
+  const LOGO_COLOR = '#f0883e';
+  const LOGO_PATH =
+    'M12 0L22 0L22 1L23 1L23 2L25 2L25 5L26 5L26 8L27 8L27 14L28 14L28 15L31 15L31 16L30 16L30 17L26 17L26 16L25 16L25 14L24 14L24 11L22 11L22 12L23 12L23 13L21 13L21 11L20 11L20 10L19 10L19 18L20 18L20 20L15 20L15 16L14 16L14 15L10 15L10 16L8 16L8 17L7 17L7 20L0 20L0 19L1 19L1 8L2 8L2 7L3 7L3 6L4 6L4 5L5 5L5 4L7 4L7 3L8 3L8 2L11 2L11 1L12 1Z';
 
   const en = {
     title: 'Shodh memory',
@@ -44,6 +48,10 @@
       const React = require('react');
       const h = React.createElement;
 
+      /**
+       * The shodh logo, traced dot for dot from the Braille-art version shodh
+       * prints (31×20 dots, one SVG unit per dot), in shodh orange.
+       */
       function ShodhIcon(props) {
         const size = props?.size ?? 24;
         return h(
@@ -51,15 +59,12 @@
           {
             width: size,
             height: size,
-            viewBox: '0 0 24 24',
-            fill: 'none',
-            stroke: 'currentColor',
-            strokeWidth: 1.6,
-            strokeLinejoin: 'round',
+            viewBox: '0 -5.5 31 31',
+            fill: LOGO_COLOR,
+            shapeRendering: 'crispEdges',
             'aria-hidden': true,
           },
-          h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 3 }),
-          h('path', { d: 'M8 10.5 12 8l4 2.5M8 10.5l4 5 4-5' }),
+          h('path', { d: LOGO_PATH }),
         );
       }
 
