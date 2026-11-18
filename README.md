@@ -14,6 +14,12 @@ window**.
 **Install:** `dsh plugin --profile web add @louisremi/dsh-shodh-memory`
 (published to npm — [registry](https://www.npmjs.com/package/@louisremi/dsh-shodh-memory))
 
+![A DSH session that saves, edits and recalls a memory, with the shodh TUI open in the right panel](https://raw.githubusercontent.com/louisremi/dsh-shodh-memory/main/docs/screenshot.png)
+
+*Left: a session saves a fact, replaces it on request, and recalls it later from
+memory. Right: `/shodh tui` shows the same memories being created, retrieved and
+deleted, with the recall's ranked results.*
+
 ---
 
 ## Why not just use the MCP server?
