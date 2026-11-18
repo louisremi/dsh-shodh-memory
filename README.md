@@ -138,12 +138,14 @@ at the server and API key this plugin is configured with.
 
 In the Web app, the right panel's start page also gets a **Shodh memory** card
 beside **New terminal**. Clicking it runs `/shodh tui` for the session, and if
-the command fails, its message appears on the card. The card lives in
+the command fails, its message appears on the card. When the binary is not
+installed yet, the card also shows **Install**, which runs `/shodh tui install`
+and then opens the TUI. The card lives in
 `client/index.js`, a small hand-written browser module with no build step.
 
 - **It is upstream's program, not a port.** Nothing of the TUI lives in this
   repository. When upstream changes it, install the newer release
-  (`/shodh tui install v0.3.0`); there is no code here to update.
+  (for example `/shodh tui install v0.3.0`); there is no code here to update.
 - **Web and Desktop only.** It uses DSH's sidebar terminal, which a headless
   profile does not have. There, `/shodh tui` reports an error and the rest of
   the plugin is unaffected.
@@ -532,7 +534,7 @@ and a real cordis `Context` boot registered `memory_save`, `memory_search`,
 client and the running binary agree. If a future server version changes a shape,
 `src/client.ts` is still the single place to adjust.
 
-**`/shodh tui` as of v0.3.0.** Run outside the test suite against the real
+**`/shodh tui`.** Run outside the test suite against the real
 terminal controller, PTY provider, and Linux sandbox of dsh 0.2.2-rc.2, with the
 real v0.2.0 arm64 `shodh-tui`: install from GitHub, launch, the profile selector
 rendering, quitting with `q`, and the same under `workspace-write` and
@@ -616,15 +618,16 @@ src/
   recall.ts         turn prompt → /api/recall → injected block
   tools.ts          memory_save / memory_search / memory_forget
   commands.ts       /shodh
-  tui.ts            /shodh tui — upstream's dashboard in a sidebar terminal
+  tui.ts            /shodh tui — binary lookup, install verb, one TUI per session
+  tui-terminal.ts   start one program in a DSH sidebar terminal, confirm it runs
   tui-install.ts    /shodh tui install — verified download of shodh-tui
 client/
   index.js          the right panel's "Shodh memory" card (browser, no build)
 test/
   format.test.ts       24-check unit test for the two rendering budgets
-  tui-install.test.ts  40-check test of the download, digest check, and unpack
-  tui.test.ts          83-check test of /shodh tui against a fake terminal
-  client.test.ts       16-check test of the card's registration and command
+  tui-install.test.ts  39-check test of the download, digest check, and unpack
+  tui.test.ts          84-check test of /shodh tui against a fake terminal
+  client.test.ts       23-check test of the card's commands and Install offer
   smoke.test.ts        66-check end-to-end test against a fake shodh
   overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)

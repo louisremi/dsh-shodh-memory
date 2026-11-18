@@ -2,7 +2,9 @@
  * Browser half of @louisremi/dsh-shodh-memory: a "Shodh memory" card on the
  * right panel's start page. Clicking it runs `/shodh tui` for the session,
  * exactly as typing it would; the Host then opens the TUI in a terminal tab.
- * A failure shows the command's message on the card.
+ * A failure shows the command's message on the card; when the failure is a
+ * missing binary, the card also offers Install, which runs `/shodh tui install`
+ * and then opens the TUI.
  *
  * Hand-written in the Client module-loader format (no build step); it requires
  * only `react`, a baseline module.
@@ -12,7 +14,10 @@
   /** Tab-type identity; the guide card registers under the same key. */
   const TYPE_ID = `${PACKAGE}/tui`;
   const KIND = 'shodh-tui';
-  const COMMAND = '/shodh tui';
+  const OPEN = '/shodh tui';
+  const INSTALL = '/shodh tui install';
+  /** First line of the Host's no-binary error (MISSING_BINARY in src/tui.ts). */
+  const MISSING_BINARY = 'No shodh-tui binary found.';
   /** rgb(240, 136, 62). */
   const LOGO_COLOR = '#f0883e';
   const LOGO_PATH =
@@ -22,17 +27,20 @@
     title: 'Shodh memory',
     description: 'Open the shodh TUI in a terminal',
     starting: 'Starting…',
+    installing: 'Installing shodh-tui…',
+    install: 'Install',
     hidden: 'Run /shodh tui in the conversation to open the shodh TUI.',
   };
 
   /**
-   * Run `/shodh tui` and reduce the outcome to an error message, if any.
+   * Run one Host command and reduce the outcome to an error message, if any.
    * @param {(line: string) => Promise<any>} execute - session-bound `remote.commands.execute`.
+   * @param {string} line - the command line.
    * @returns {Promise<string | undefined>} the error text, or undefined on success.
    */
-  async function openTui(execute) {
+  async function run(execute, line) {
     try {
-      const response = await execute(COMMAND);
+      const response = await execute(line);
       if (response?.ok !== true) return response?.error?.message || 'The command failed.';
       const result = response.value?.result;
       if (!result) return 'The /shodh command is not available in this session.';
@@ -40,6 +48,28 @@
     } catch (error) {
       return typeof error?.message === 'string' ? error.message : String(error);
     }
+  }
+
+  /**
+   * Open the TUI, installing it first when asked.
+   * @param {(line: string) => Promise<any>} execute - session-bound command runner.
+   * @param {boolean} install - run `/shodh tui install` first.
+   * @returns {Promise<string | undefined>} the error text, or undefined on success.
+   */
+  async function openTui(execute, install) {
+    if (install) {
+      const failed = await run(execute, INSTALL);
+      if (failed) return failed;
+    }
+    return run(execute, OPEN);
+  }
+
+  /**
+   * @param {string | undefined} error - text from {@link openTui}.
+   * @returns {boolean} whether it reports a missing binary.
+   */
+  function isMissingBinary(error) {
+    return typeof error === 'string' && error.startsWith(MISSING_BINARY);
   }
 
   root.__ModuleLoader__.load({
@@ -70,40 +100,49 @@
 
       // Hover and focus rings need selectors, which inline styles cannot express.
       const css = `
-.shodh-tui-card{box-sizing:border-box;display:flex;align-items:center;gap:14px;width:100%;min-height:56px;padding:14px 20px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsl-guide-entry-radius);background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;text-align:left;cursor:pointer}
+.shodh-tui-card{position:relative;box-sizing:border-box;display:flex;align-items:center;gap:14px;width:100%;min-height:56px;padding:14px 20px;overflow:hidden;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsl-guide-entry-radius);background:var(--dsw-alias-bg-layer-1)}
 .shodh-tui-card:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.shodh-tui-card:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}
-.shodh-tui-card[aria-busy=true]{cursor:progress}
+.shodh-tui-main{position:absolute;inset:0;width:100%;height:100%;padding:0;border:0;border-radius:inherit;background:none;cursor:pointer}
+.shodh-tui-main:disabled,.shodh-tui-card[aria-busy=true] .shodh-tui-main{cursor:progress}
+.shodh-tui-main:focus-visible,.shodh-tui-install:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}
+.shodh-tui-icon,.shodh-tui-text{position:relative;pointer-events:none}
 .shodh-tui-icon{display:flex;flex:none;color:var(--dsw-alias-label-secondary)}
-.shodh-tui-text{display:flex;flex-direction:column;gap:3px;min-width:0}
+.shodh-tui-text{flex:1;display:flex;flex-direction:column;gap:3px;min-width:0}
+.shodh-tui-install{position:relative;flex:none;height:28px;padding:0 12px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer}
+.shodh-tui-install:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .shodh-tui-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.4}
 .shodh-tui-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.4}
 .shodh-tui-error{color:var(--dsw-alias-label-error);white-space:pre-wrap;overflow-wrap:anywhere}`;
 
-      /** The start-page card: one click, one `/shodh tui`. */
+      /**
+       * The start-page card: one click, one `/shodh tui`. When that fails for
+       * want of a binary, an Install button installs it and opens the TUI.
+       */
       function TuiCard({ title, description, execute }) {
-        const [busy, setBusy] = React.useState(false);
+        /** `undefined` when idle, else `'starting'` or `'installing'`. */
+        const [busy, setBusy] = React.useState(undefined);
         const [error, setError] = React.useState(undefined);
-        const onClick = () => {
+        const start = (install) => {
           if (busy || !execute) return;
-          setBusy(true);
+          setBusy(install ? 'installing' : 'starting');
           setError(undefined);
-          void openTui(execute).then((message) => {
-            setBusy(false);
+          void openTui(execute, install).then((message) => {
+            setBusy(undefined);
             setError(message);
           });
         };
-        const sub = busy ? en.starting : (error ?? description);
+        const sub = busy ? en[busy] : (error ?? description);
         return h(
-          'button',
-          {
-            type: 'button',
-            className: 'shodh-tui-card',
-            onClick,
-            'aria-busy': busy,
-            disabled: !execute,
-          },
+          'div',
+          { className: 'shodh-tui-card', 'aria-busy': busy !== undefined },
           h('style', null, css),
+          h('button', {
+            type: 'button',
+            className: 'shodh-tui-main',
+            'aria-label': sub ? `${title}. ${sub}` : title,
+            disabled: !execute || busy !== undefined,
+            onClick: () => start(false),
+          }),
           h('span', { className: 'shodh-tui-icon' }, h(ShodhIcon, { size: description ? 26 : 22 })),
           h(
             'span',
@@ -119,6 +158,13 @@
                 sub,
               ),
           ),
+          !busy &&
+            isMissingBinary(error) &&
+            h(
+              'button',
+              { type: 'button', className: 'shodh-tui-install', onClick: () => start(true) },
+              en.install,
+            ),
         );
       }
 
@@ -153,7 +199,8 @@
               }),
             'shodh-memory: tab type',
           );
-          const inject = (sessionId) => ({
+          /** Per-session props for the card: a command runner bound to that session. */
+          const cardProps = (sessionId) => ({
             execute: sessionId
               ? (line) => ctx.remote.commands.execute(sessionId, line, [])
               : undefined,
@@ -162,7 +209,7 @@
             () =>
               ctx.slots.inject('sidebar.right.tab.guide.entry', () =>
                 ctx.slots.register(
-                  { name: 'sidebar.right.tab.guide.entry', key: TYPE_ID, inject },
+                  { name: 'sidebar.right.tab.guide.entry', key: TYPE_ID, inject: cardProps },
                   TuiCard,
                 ),
               ),
@@ -177,7 +224,7 @@
           );
         },
         // Exposed for the test suite only.
-        __test: { openTui, TYPE_ID, KIND, COMMAND, en },
+        __test: { openTui, isMissingBinary, TYPE_ID, KIND, OPEN, INSTALL, en },
       };
     },
   });

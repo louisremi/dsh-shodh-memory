@@ -21,7 +21,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ShodhClient } from '../src/client.js';
 import { normalizeConfig } from '../src/config.js';
-import { createTui, launchLine, shellQuote, TUI_TITLE } from '../src/tui.js';
+import { createTui, MISSING_BINARY, TUI_TITLE } from '../src/tui.js';
+import { launchLine, shellQuote } from '../src/tui-terminal.js';
 import type {
   AgentRef,
   AgentTerminalLike,
@@ -191,14 +192,16 @@ function tui(
   const client = {
     soft: async () => ('health' in overrides ? overrides.health : { status: 'ok' }),
   } as unknown as ShodhClient;
-  return createTui(ctxHost.ctx, {
-    client,
-    cfg,
-    apiKey: 'apiKey' in overrides ? overrides.apiKey : 'key-123',
-    resolveUserId: () => 'dsh-my-project',
-    releaseApi: overrides.releaseApi,
-    timings: { ...FAST, ...overrides.timings },
-  });
+  return createTui(
+    ctxHost.ctx,
+    {
+      client,
+      cfg,
+      apiKey: 'apiKey' in overrides ? overrides.apiKey : 'key-123',
+      resolveUserId: () => 'dsh-my-project',
+    },
+    { releaseApi: overrides.releaseApi, timings: { ...FAST, ...overrides.timings } },
+  );
 }
 
 const emptyHome = await mkdtemp(join(tmpdir(), 'shodh-tui-home-'));
@@ -401,6 +404,11 @@ console.log('\n[6] refusals');
   const none = host();
   const missing = await tui(none, { tui: { path: '' } }).run({ agent: agent('s') }, '');
   check('no binary anywhere is an error', missing.kind === 'error');
+  check(
+    '…whose first line is the one the card matches',
+    missing.text.split('\n')[0] === MISSING_BINARY &&
+      MISSING_BINARY === 'No shodh-tui binary found.',
+  );
   check('…that names the install command', missing.text.includes('/shodh tui install'));
   check('…and the override', missing.text.includes('tui.path'));
   check('…and opens no terminal', none.opened.length === 0);

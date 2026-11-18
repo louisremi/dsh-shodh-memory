@@ -22,45 +22,47 @@
  */
 
 import { constants } from 'node:fs';
-import { access, mkdir, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, stat } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 import type { ShodhClient } from './client.js';
 import type { TenantResolver } from './tools.js';
 import {
+  errorMessage,
   installedPath,
   installTui,
   listInstalled,
   normalizeTag,
+  type ReleaseTag,
   releaseAsset,
   TUI_BINARY,
-  TuiInstallError,
   tuiRoot,
 } from './tui-install.js';
+import {
+  DEFAULT_TIMINGS,
+  isLive,
+  launchInTerminal,
+  type TerminalServices,
+  type TerminalTimings,
+  terminalServices,
+} from './tui-terminal.js';
 import type {
   AgentRef,
   AgentTerminalLike,
   CommandInvocation,
   CommandResult,
-  SandboxPolicyLike,
   ShodhConfig,
   ShodhContext,
   SubprocessLike,
-  TerminalControllerLike,
 } from './types.js';
 
 /** Tab title of the terminal, and how the command result refers to it. */
 export const TUI_TITLE = 'Shodh memory';
 
-/** Default timings; tests shorten them. */
-const TIMINGS = {
-  /** Output silence that counts as "the shell has finished starting". */
-  startupQuietMs: 300,
-  /** Longest wait for the shell before typing anyway. */
-  startupTimeoutMs: 15_000,
-  /** How long the program must survive to count as started. */
-  launchWatchMs: 1_500,
-};
+/**
+ * First line of the error `/shodh tui` returns when no binary is found. The
+ * start-page card (client/index.js) matches it to offer its Install button.
+ */
+export const MISSING_BINARY = `No ${TUI_BINARY} binary found.`;
 
 /** Dependencies for {@link createTui}. */
 export interface TuiDeps {
@@ -72,10 +74,14 @@ export interface TuiDeps {
   apiKey?: string;
   /** Tenant resolver, to tell the person which profile to pick. */
   resolveUserId: TenantResolver;
-  /** GitHub API root override; tests point it at a local server. */
+}
+
+/** Test seams for {@link createTui}; production passes none. */
+export interface TuiTestHooks {
+  /** GitHub API root; a local server in tests. */
   releaseApi?: string;
-  /** Timing overrides; tests shorten them. */
-  timings?: Partial<typeof TIMINGS>;
+  /** Shorter waits. */
+  timings?: Partial<TerminalTimings>;
 }
 
 /** The `/shodh tui` verb. */
@@ -95,11 +101,12 @@ export interface Tui {
  * Build the `/shodh tui` verb for one plugin fiber.
  * @param ctx - the cordis context owning the plugin fiber.
  * @param deps - wired dependencies.
+ * @param hooks - test seams; omitted in production.
  * @returns the verb and its teardown.
  */
-export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
+export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks = {}): Tui {
   const { client, cfg, apiKey, resolveUserId } = deps;
-  const timings = { ...TIMINGS, ...deps.timings };
+  const timings: TerminalTimings = { ...DEFAULT_TIMINGS, ...hooks.timings };
 
   /** One live terminal per session; a second `/shodh tui` points at the first. */
   const terminals = new Map<string, AgentTerminalLike>();
@@ -112,21 +119,19 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
     return typeof profile?.home === 'string' && profile.home.length > 0 ? profile.home : undefined;
   }
 
+  /**
+   * `/shodh tui`: open the TUI for the invoking session, or point at the one
+   * already open. Concurrent invocations for one session share a launch.
+   * @param invocation - the command invocation.
+   * @returns the command result.
+   */
   async function open(invocation: CommandInvocation): Promise<CommandResult> {
-    if (!cfg.tui.enabled) {
-      return { kind: 'error', text: 'The TUI is switched off (tui.enabled is false).' };
-    }
     if (process.platform === 'win32') {
       return { kind: 'error', text: 'The shodh TUI is not supported on Windows yet.' };
     }
     const agent = invocation.agent;
-    const controller = ctx.get?.('terminalController') as TerminalControllerLike | undefined;
-    const sandboxPolicy = ctx.get?.('sandboxPolicy') as SandboxPolicyLike | undefined;
-    if (
-      !agent ||
-      typeof controller?.openForAgent !== 'function' ||
-      typeof sandboxPolicy?.resolve !== 'function'
-    ) {
+    const services = terminalServices(ctx);
+    if (!agent || !services) {
       return {
         kind: 'error',
         text: 'The shodh TUI needs a sidebar terminal, which only the DSH Web and Desktop apps provide.',
@@ -146,19 +151,24 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
 
     const pending = opening.get(key);
     if (pending) return pending;
-    const task = launch(invocation, agent, controller, sandboxPolicy, key).finally(() => {
+    const task = launch(invocation, agent, services).finally(() => {
       opening.delete(key);
     });
     opening.set(key, task);
     return task;
   }
 
+  /**
+   * Find the binary and start it in a new sidebar terminal.
+   * @param invocation - the command invocation; its signal cancels the launch.
+   * @param agent - the invoking session's agent.
+   * @param services - {@link terminalServices}.
+   * @returns the command result; on success the terminal is remembered for the session.
+   */
   async function launch(
     invocation: CommandInvocation,
     agent: AgentRef,
-    controller: TerminalControllerLike,
-    sandboxPolicy: SandboxPolicyLike,
-    key: string,
+    services: TerminalServices,
   ): Promise<CommandResult> {
     const signal = invocation.signal ?? new AbortController().signal;
     const root = tuiRoot(hostHome());
@@ -169,51 +179,25 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
     const env: Record<string, string> = { SHODH_SERVER_URL: cfg.baseUrl };
     if (apiKey) env.SHODH_API_KEY = apiKey;
 
-    let terminal: AgentTerminalLike;
-    try {
-      terminal = await controller.openForAgent(
-        agent,
-        {
-          title: TUI_TITLE,
-          // The TUI appends to `tui_debug.log` in its working directory. Start
-          // it somewhere of ours so that file never lands in the workspace.
-          cwd: await workingDirectory(root),
-          cols: cfg.tui.cols,
-          rows: cfg.tui.rows,
-          policy: sandboxPolicy.resolve({ session: agent.session }),
-          preferredShells: [],
-          // Through the environment, not the command line: the key must not be
-          // echoed into the terminal's scrollback.
-          env,
-        },
-        signal,
-      );
-    } catch (error) {
-      return { kind: 'error', text: openFailure(error) };
-    }
+    const outcome = await launchInTerminal(
+      services,
+      agent,
+      {
+        title: TUI_TITLE,
+        binary: binary.path,
+        // The TUI appends to `tui_debug.log` in its working directory. Start
+        // it somewhere of ours so that file never lands in the workspace.
+        cwd: root,
+        cols: cfg.tui.cols,
+        rows: cfg.tui.rows,
+        env,
+      },
+      timings,
+      signal,
+    );
+    if ('error' in outcome) return { kind: 'error', text: outcome.error };
 
-    try {
-      await shellSettled(terminal, timings.startupQuietMs, timings.startupTimeoutMs, signal);
-      await terminal.write(`${launchLine(binary.path)}\r`);
-      await watchLaunch(terminal, timings.launchWatchMs, signal);
-    } catch (error) {
-      await terminal.close().catch(() => {});
-      return { kind: 'error', text: `Could not start the shodh TUI: ${messageOf(error)}` };
-    }
-
-    if (terminal.info.state !== 'running') {
-      // Started and died at once: a loader error (wrong glibc, wrong CPU) is the
-      // usual cause, and its message is the last thing on the screen.
-      const screen = await lastLines(terminal, 6);
-      await terminal.close().catch(() => {});
-      const detail = screen || terminal.info.error || `exit code ${terminal.info.exitCode ?? '?'}`;
-      return {
-        kind: 'error',
-        text: `shodh-tui exited as soon as it started (${binary.path}):\n${detail}`,
-      };
-    }
-
-    terminals.set(key, terminal);
+    terminals.set(sessionKey(agent), outcome.terminal);
     return {
       kind: 'success',
       text: [
@@ -228,6 +212,10 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
    *
    * Every candidate is checked through the session's own execution provider
    * when it has one, because that is where the terminal will run it.
+   * @param agent - the invoking session's agent.
+   * @param root - {@link tuiRoot}.
+   * @param signal - cancellation.
+   * @returns the absolute path, or an error message fit for the command result.
    */
   async function resolveBinary(
     agent: AgentRef,
@@ -264,34 +252,41 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
 
     return {
       error: [
-        `No ${TUI_BINARY} binary found.`,
+        MISSING_BINARY,
         'Run `/shodh tui install` to download it from the shodh-memory GitHub release,',
         'or set tui.path to a binary you built.',
       ].join('\n'),
     };
   }
 
-  /** Pick among several managed installs: configured, then the server's, then newest. */
-  async function preferredTag(installed: string[]): Promise<string> {
+  /**
+   * Pick among several managed installs: configured, then the server's, then newest.
+   * @param installed - from {@link listInstalled}, newest first; never empty.
+   * @returns the tag to run.
+   */
+  async function preferredTag(installed: ReleaseTag[]): Promise<ReleaseTag> {
     const configured = normalizeTag(cfg.tui.version);
     if (configured && installed.includes(configured)) return configured;
     if (installed.length > 1) {
       const server = await serverTag();
       if (server && installed.includes(server)) return server;
     }
-    return installed[0] as string;
+    return installed[0] as ReleaseTag;
   }
 
   /** @returns the release tag matching the running server, when it answers. */
-  async function serverTag(): Promise<string | undefined> {
+  async function serverTag(): Promise<ReleaseTag | undefined> {
     const health = await client.soft('/health', undefined, { method: 'GET', timeoutMs: 2000 });
     return normalizeTag(health?.version);
   }
 
+  /**
+   * `/shodh tui install [version]`: download and verify one release's binary.
+   * @param invocation - the command invocation; its signal cancels the download.
+   * @param argument - the version, or empty for the configured or server version.
+   * @returns the command result.
+   */
   async function install(invocation: CommandInvocation, argument: string): Promise<CommandResult> {
-    if (!cfg.tui.enabled) {
-      return { kind: 'error', text: 'The TUI is switched off (tui.enabled is false).' };
-    }
     const asset = releaseAsset(process.platform, process.arch);
     if (!asset) {
       return {
@@ -300,7 +295,7 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
       };
     }
 
-    let tag: string | undefined;
+    let tag: ReleaseTag | undefined;
     if (argument) {
       tag = normalizeTag(argument);
       if (!tag) return { kind: 'error', text: 'Usage: /shodh tui install [version, e.g. v0.2.0]' };
@@ -327,7 +322,7 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
         root,
         tag,
         asset,
-        apiBase: deps.releaseApi,
+        apiBase: hooks.releaseApi,
         signal: invocation.signal,
       });
       return {
@@ -340,13 +335,21 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps): Tui {
         ].join('\n'),
       };
     } catch (error) {
-      const text = error instanceof TuiInstallError ? error.message : messageOf(error);
-      return { kind: 'error', text: `Could not install ${TUI_BINARY} ${tag}: ${text}` };
+      return {
+        kind: 'error',
+        text: `Could not install ${TUI_BINARY} ${tag}: ${errorMessage(error)}`,
+      };
     }
   }
 
   return {
     run(invocation, argument) {
+      if (!cfg.tui.enabled) {
+        return Promise.resolve({
+          kind: 'error',
+          text: 'The TUI is switched off (tui.enabled is false).',
+        });
+      }
       const [verb = ''] = argument.split(/\s+/);
       const rest = argument.slice(verb.length).trim();
       if (verb === '') return open(invocation);
@@ -372,32 +375,6 @@ function sessionKey(agent: AgentRef): string {
   return agent.id ?? agent.session?.id ?? 'default';
 }
 
-/** Whether a terminal we opened earlier is still showing a running program. */
-function isLive(terminal: AgentTerminalLike): boolean {
-  if (terminal.info.state !== 'running') return false;
-  try {
-    // Reads throw once the tab was closed and the screen released.
-    terminal.read({ offset: 0, count: 1, maxBytes: 1024 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * A directory for the TUI to start in.
- * @param root - the managed install root, the preferred place.
- * @returns `root`, or the system temp directory when `root` cannot be created.
- */
-async function workingDirectory(root: string): Promise<string> {
-  try {
-    await mkdir(root, { recursive: true });
-    return root;
-  } catch {
-    return tmpdir();
-  }
-}
-
 /**
  * Resolve an executable on this machine, for hosts without a subprocess
  * provider on the agent context.
@@ -421,142 +398,4 @@ async function locateLocally(command: string): Promise<string | undefined> {
     }
   }
   return undefined;
-}
-
-/**
- * The one line typed into the terminal's shell.
- *
- * `exec` replaces the shell, so quitting the TUI ends the terminal instead of
- * dropping the person at a prompt in our state directory.
- *
- * `|| exit 127` matters as much: an interactive shell survives a failed `exec`
- * (file not visible inside the sandbox, wrong CPU architecture) and would sit
- * at its prompt looking like a successful launch. Exiting turns that into an
- * ended terminal, which is what the launch watch reports. Checked in bash and
- * dash; zsh and fish (3.0+) accept the same `exec … || exit` syntax.
- *
- * The leading space keeps it out of shell history where ignorespace is set.
- *
- * @param path - absolute path of the binary.
- * @returns the line, without the trailing carriage return.
- */
-export function launchLine(path: string): string {
-  return ` exec ${shellQuote(path)} || exit 127`;
-}
-
-/**
- * Quote one word for a POSIX shell.
- * @param value - the raw word.
- * @returns the word in single quotes, safe to paste after `exec`.
- */
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * Wait until the shell has printed something and then gone quiet.
- *
- * Typing while startup files still run mostly works, since the terminal
- * buffers input, but a prompt framework that redraws late can swallow it.
- * Giving up after the timeout and typing anyway is right: a shell whose prompt
- * prints nothing would otherwise never be "ready".
- */
-async function shellSettled(
-  terminal: AgentTerminalLike,
-  quietMs: number,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let revision = terminal.revision;
-  let lastChange = screenText(terminal) === '' ? undefined : Date.now();
-  for (;;) {
-    signal.throwIfAborted();
-    if (terminal.info.state !== 'running') throw new Error('the terminal shell exited at startup');
-    const now = Date.now();
-    if (now >= deadline) return;
-    if (lastChange !== undefined && now - lastChange >= quietMs) return;
-    const wake = lastChange === undefined ? deadline : Math.min(deadline, lastChange + quietMs);
-    if (await changedWithin(terminal, revision, wake - now, signal)) {
-      revision = terminal.revision;
-      lastChange = Date.now();
-    }
-  }
-}
-
-/** Wait out the launch window, returning early if the terminal ends. */
-async function watchLaunch(
-  terminal: AgentTerminalLike,
-  windowMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  const deadline = Date.now() + windowMs;
-  let revision = terminal.revision;
-  for (;;) {
-    signal.throwIfAborted();
-    if (terminal.info.state !== 'running') return;
-    const left = deadline - Date.now();
-    if (left <= 0) return;
-    if (await changedWithin(terminal, revision, left, signal)) revision = terminal.revision;
-  }
-}
-
-/**
- * Wait for the terminal to change, a delay to pass, or `stop` to abort.
- * @returns whether the terminal changed.
- */
-async function changedWithin(
-  terminal: AgentTerminalLike,
-  revision: number,
-  delayMs: number,
-  stop: AbortSignal,
-): Promise<boolean> {
-  if (terminal.revision > revision) return true;
-  const wait = new AbortController();
-  const end = () => wait.abort();
-  const timer = setTimeout(end, Math.max(0, delayMs));
-  stop.addEventListener('abort', end, { once: true });
-  try {
-    await terminal.changed(revision, wait.signal);
-    // Trust the revision, not the return: a wait that merely ended is not output.
-    return terminal.revision > revision;
-  } catch (error) {
-    if (wait.signal.aborted) return false;
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    stop.removeEventListener('abort', end);
-  }
-}
-
-/** The rendered screen, or `''` when it cannot be read. */
-function screenText(terminal: AgentTerminalLike): string {
-  try {
-    return terminal.read({ offset: 0, count: 200, maxBytes: 16 * 1024 }).text;
-  } catch {
-    return '';
-  }
-}
-
-/** The last non-empty screen lines, once pending output has been applied. */
-async function lastLines(terminal: AgentTerminalLike, count: number): Promise<string> {
-  await terminal.drain().catch(() => {});
-  return screenText(terminal)
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0)
-    .slice(-count)
-    .join('\n');
-}
-
-/** Turn an `openForAgent` rejection into a line the person can act on. */
-function openFailure(error: unknown): string {
-  if ((error as { code?: unknown } | undefined)?.code === 'terminal/limit-reached') {
-    return 'This session has too many terminals open. Close a terminal tab, then run /shodh tui again.';
-  }
-  return `Could not open a sidebar terminal: ${messageOf(error)}`;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -25,10 +25,18 @@ import {
   installTui,
   listInstalled,
   normalizeTag,
+  type ReleaseTag,
   releaseAsset,
   TuiInstallError,
   tuiRoot,
 } from '../src/tui-install.js';
+
+/** A known-good tag; production code gets them from `normalizeTag` too. */
+function tag(version: string): ReleaseTag {
+  const normalized = normalizeTag(version);
+  assert.ok(normalized, `${version} is a tag`);
+  return normalized;
+}
 
 let passed = 0;
 function check(label: string, condition: unknown): void {
@@ -166,14 +174,14 @@ const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 const root = await mkdtemp(join(tmpdir(), 'shodh-tui-install-'));
 
 /** Run an install expected to fail; return its message. */
-async function failure(tag: string): Promise<string> {
+async function failure(name: string): Promise<string> {
   try {
-    await installTui({ root, tag, asset: ASSET, apiBase: base });
+    await installTui({ root, tag: tag(name), asset: ASSET, apiBase: base });
   } catch (error) {
-    assert.ok(error instanceof TuiInstallError, `${tag}: a TuiInstallError`);
+    assert.ok(error instanceof TuiInstallError, `${name}: a TuiInstallError`);
     return error.message;
   }
-  assert.fail(`${tag}: install should have failed`);
+  assert.fail(`${name}: install should have failed`);
 }
 
 /** Files left under one tag directory. */
@@ -221,12 +229,11 @@ else process.env.DSH_HOME = savedHome;
 
 console.log('\n[4] a verified install');
 check('nothing installed at first', (await listInstalled(root)).length === 0);
-const result = await installTui({ root, tag: 'v1.0.0', asset: ASSET, apiBase: base });
+const result = await installTui({ root, tag: tag('v1.0.0'), asset: ASSET, apiBase: base });
 check('reports the tag', result.tag === 'v1.0.0');
 check('reports the published digest', result.sha256 === sha256(GOOD));
-check('installs to <root>/<tag>/shodh-tui', result.path === installedPath(root, 'v1.0.0'));
+check('installs to <root>/<tag>/shodh-tui', result.path === installedPath(root, tag('v1.0.0')));
 check('binary bytes are exact', (await readFile(result.path)).equals(BINARY));
-check('reports the binary size', result.bytes === BINARY.length);
 check('binary is executable', ((await stat(result.path)).mode & 0o777) === 0o755);
 check(
   'only shodh-tui is on disk — no server, no archive',
@@ -263,7 +270,7 @@ cancelled.abort();
 try {
   await installTui({
     root,
-    tag: 'v1.0.0',
+    tag: tag('v1.0.0'),
     asset: ASSET,
     apiBase: base,
     signal: cancelled.signal,
@@ -278,8 +285,8 @@ console.log('\n[7] several installs sort newest first');
 releases['v1.2.0'] = { archive: GOOD };
 releases['v1.10.0'] = { archive: GOOD };
 releases['v1.10.0-rc.1'] = { archive: GOOD };
-for (const tag of ['v1.2.0', 'v1.10.0', 'v1.10.0-rc.1']) {
-  await installTui({ root, tag, asset: ASSET, apiBase: base });
+for (const version of ['v1.2.0', 'v1.10.0', 'v1.10.0-rc.1']) {
+  await installTui({ root, tag: tag(version), asset: ASSET, apiBase: base });
 }
 check(
   'numeric order, release above its prerelease',

@@ -80,7 +80,7 @@ mod.apply({
     },
   },
 });
-const { openTui, TYPE_ID, COMMAND } = mod.__test;
+const { openTui, isMissingBinary, TYPE_ID, OPEN, INSTALL } = mod.__test;
 
 const type = types[0] as Anything;
 check('one tab type with one guide card', types.length === 1 && type.guide.length === 1);
@@ -93,7 +93,7 @@ check(
   slots.some((s) => s.name === 'sidebar.right.pane.tab' && s.key === TYPE_ID),
 );
 
-await card.inject('session-1').execute(COMMAND);
+await card.inject('session-1').execute(OPEN);
 check(
   'the card runs /shodh tui in its own session, without attachments',
   JSON.stringify(executed) === JSON.stringify([['session-1', '/shodh tui', []]]),
@@ -103,12 +103,12 @@ check('no session, no runner', card.inject(undefined).execute === undefined);
 console.log('outcomes');
 const reply = (value: unknown) => async () => value;
 const result = (kind: string, text?: string) => ({ ok: true, value: { result: { kind, text } } });
+const missingText = 'No shodh-tui binary found.\nRun `/shodh tui install` …';
 
 check('success → no error', (await openTui(reply(result('success', 'Opened')))) === undefined);
 check(
   'command error → its text',
-  (await openTui(reply(result('error', 'No shodh-tui binary found.')))) ===
-    'No shodh-tui binary found.',
+  (await openTui(reply(result('error', 'Cannot open a terminal.')))) === 'Cannot open a terminal.',
 );
 check(
   'unknown command → explained',
@@ -124,5 +124,39 @@ check(
     throw new Error('disconnected');
   })) === 'disconnected',
 );
+
+console.log('install button');
+check('a missing binary offers Install', isMissingBinary(missingText));
+check(
+  'other errors do not',
+  !isMissingBinary('Cannot open a terminal.') && !isMissingBinary(undefined),
+);
+check('the commands it runs', OPEN === '/shodh tui' && INSTALL === '/shodh tui install');
+
+const ran: string[] = [];
+const scripted = (results: Record<string, unknown>) => async (line: string) => {
+  ran.push(line);
+  return results[line];
+};
+const installed = await openTui(
+  scripted({ [INSTALL]: result('success', 'Installed'), [OPEN]: result('success', 'Opened') }),
+  true,
+);
+check(
+  'Install runs install, then open',
+  installed === undefined && ran.join('|') === '/shodh tui install|/shodh tui',
+);
+
+ran.length = 0;
+const failedInstall = await openTui(
+  scripted({ [INSTALL]: result('error', 'Could not install shodh-tui v0.2.0: offline') }),
+  true,
+);
+check('a failed install reports its text', failedInstall?.includes('offline'));
+check('…and does not try to open', ran.join('|') === '/shodh tui install');
+
+ran.length = 0;
+await openTui(scripted({ [OPEN]: result('success', 'Opened') }), false);
+check('a plain click runs open only', ran.join('|') === '/shodh tui');
 
 console.log(`\n${passed} checks passed.`);

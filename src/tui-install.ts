@@ -34,8 +34,17 @@ export const TUI_BINARY = 'shodh-tui';
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 /** The binary is ~3 MB; a tar entry claiming far more is not it. */
 const MAX_BINARY_BYTES = 64 * 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+/** Overall budget for release metadata plus the download. */
+const INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const TAR_BLOCK = 512;
+
+/**
+ * A release tag such as `v0.2.0`, as produced by {@link normalizeTag}.
+ *
+ * Tags become a directory name and a URL path segment, so only validated
+ * strings may carry this type: nothing else can be passed where one is needed.
+ */
+export type ReleaseTag = string & { readonly __brand: 'ReleaseTag' };
 
 /** A failure with a message written for the person who ran the command. */
 export class TuiInstallError extends Error {
@@ -64,10 +73,10 @@ export function releaseAsset(platform: string, arch: string): string | undefined
  * @returns `v0.2.0`, or `undefined` for input that is not a version. The result
  *   is used as a directory name and a URL segment, so nothing else gets through.
  */
-export function normalizeTag(version: unknown): string | undefined {
+export function normalizeTag(version: unknown): ReleaseTag | undefined {
   if (typeof version !== 'string') return undefined;
   const match = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/.exec(version.trim());
-  return match ? `v${match[1]}` : undefined;
+  return match ? (`v${match[1]}` as ReleaseTag) : undefined;
 }
 
 /**
@@ -85,10 +94,10 @@ export function tuiRoot(home?: string): string {
 /**
  * Where the binary for one release tag lives.
  * @param root - {@link tuiRoot}.
- * @param tag - a tag from {@link normalizeTag}.
+ * @param tag - the release tag.
  * @returns the absolute file path.
  */
-export function installedPath(root: string, tag: string): string {
+export function installedPath(root: string, tag: ReleaseTag): string {
   return join(root, tag, TUI_BINARY);
 }
 
@@ -97,18 +106,20 @@ export function installedPath(root: string, tag: string): string {
  * @param root - {@link tuiRoot}.
  * @returns the tags; empty when nothing is installed.
  */
-export async function listInstalled(root: string): Promise<string[]> {
+export async function listInstalled(root: string): Promise<ReleaseTag[]> {
   let names: string[];
   try {
     names = await readdir(root);
   } catch {
     return [];
   }
-  const tags: string[] = [];
+  const tags: ReleaseTag[] = [];
   for (const name of names) {
-    if (normalizeTag(name) !== name) continue;
+    const tag = normalizeTag(name);
+    // Only directories already named exactly like a tag (`v0.2.0`, not `0.2.0`).
+    if (tag !== name) continue;
     try {
-      if ((await stat(installedPath(root, name))).isFile()) tags.push(name);
+      if ((await stat(installedPath(root, tag))).isFile()) tags.push(tag);
     } catch {
       /* a tag directory without a binary is a failed or removed install */
     }
@@ -117,7 +128,7 @@ export async function listInstalled(root: string): Promise<string[]> {
 }
 
 /** Order release tags newest first; a prerelease sorts below its release. */
-function compareTagsDescending(a: string, b: string): number {
+function compareTagsDescending(a: ReleaseTag, b: ReleaseTag): number {
   const parse = (tag: string) => {
     const [core = '', pre] = tag.slice(1).split('-', 2);
     return { parts: core.split('.').map(Number), pre };
@@ -138,28 +149,24 @@ function compareTagsDescending(a: string, b: string): number {
 export interface InstallOptions {
   /** {@link tuiRoot}. */
   root: string;
-  /** A tag from {@link normalizeTag}. */
-  tag: string;
+  /** The release to install. */
+  tag: ReleaseTag;
   /** An asset name from {@link releaseAsset}. */
   asset: string;
   /** Repository API root; tests point this at a local server. */
   apiBase?: string;
   /** Cancels the download. */
   signal?: AbortSignal;
-  /** Overall budget for metadata plus download. */
-  timeoutMs?: number;
 }
 
 /** What {@link installTui} did. */
 export interface InstallResult {
-  tag: string;
+  tag: ReleaseTag;
   /** Absolute path of the installed binary. */
   path: string;
   /** Hex sha256 of the verified archive. */
   sha256: string;
   asset: string;
-  /** Size of the installed binary. */
-  bytes: number;
 }
 
 /**
@@ -177,7 +184,7 @@ export interface InstallResult {
 export async function installTui(options: InstallOptions): Promise<InstallResult> {
   const { root, tag, asset } = options;
   const apiBase = (options.apiBase ?? DEFAULT_RELEASE_API).replace(/\/+$/, '');
-  const scope = linkedSignal(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const deadline = linkedSignal(options.signal, INSTALL_TIMEOUT_MS);
 
   const dir = join(root, tag);
   const suffix = randomBytes(6).toString('hex');
@@ -186,31 +193,31 @@ export async function installTui(options: InstallOptions): Promise<InstallResult
   const finalPath = installedPath(root, tag);
 
   try {
-    const release = await findAsset(apiBase, tag, asset, scope.signal);
+    const release = await findAsset(apiBase, tag, asset, deadline.signal);
     await mkdir(dir, { recursive: true });
 
-    const sha256 = await download(release.url, archivePath, release.size, scope.signal);
+    const sha256 = await download(release.url, archivePath, release.size, deadline.signal);
     if (sha256 !== release.sha256) {
       throw new TuiInstallError(
         `sha256 mismatch for ${asset}: GitHub lists ${release.sha256}, the download is ${sha256}. Nothing was installed.`,
       );
     }
 
-    const bytes = await extractBinary(archivePath, partPath);
+    await extractBinary(archivePath, partPath);
     // `open(…, mode)` is filtered through the umask; the binary must be runnable.
     await chmod(partPath, 0o755);
     await rename(partPath, finalPath);
-    return { tag, path: finalPath, sha256, asset, bytes };
+    return { tag, path: finalPath, sha256, asset };
   } catch (error) {
     if (error instanceof TuiInstallError) throw error;
-    if (scope.signal.aborted) {
+    if (deadline.signal.aborted) {
       throw new TuiInstallError(
         options.signal?.aborted ? 'The install was cancelled.' : 'The download timed out.',
       );
     }
-    throw new TuiInstallError(error instanceof Error ? error.message : String(error));
+    throw new TuiInstallError(errorMessage(error));
   } finally {
-    scope.dispose();
+    deadline.dispose();
     await rm(archivePath, { force: true }).catch(() => {});
     await rm(partPath, { force: true }).catch(() => {});
   }
@@ -233,7 +240,7 @@ interface ReleaseAsset {
  */
 async function findAsset(
   apiBase: string,
-  tag: string,
+  tag: ReleaseTag,
   asset: string,
   signal: AbortSignal,
 ): Promise<ReleaseAsset> {
@@ -334,9 +341,8 @@ async function download(
  *
  * @param archivePath - the verified archive.
  * @param destination - file to create; must not exist.
- * @returns the number of bytes written.
  */
-async function extractBinary(archivePath: string, destination: string): Promise<number> {
+async function extractBinary(archivePath: string, destination: string): Promise<void> {
   const input = createReadStream(archivePath);
   const gunzip = createGunzip();
   input.on('error', (error) => gunzip.destroy(error));
@@ -345,7 +351,7 @@ async function extractBinary(archivePath: string, destination: string): Promise<
   let header: Buffer = Buffer.alloc(0);
   let remaining = 0; // data bytes left in the current entry
   let padding = 0; // zero fill up to the next 512-byte boundary
-  let written = 0;
+  let found = false;
   let out: Awaited<ReturnType<typeof open>> | undefined;
 
   try {
@@ -361,7 +367,7 @@ async function extractBinary(archivePath: string, destination: string): Promise<
           if (remaining === 0 && out) {
             await out.close();
             out = undefined;
-            return written;
+            return;
           }
           continue;
         }
@@ -390,7 +396,7 @@ async function extractBinary(archivePath: string, destination: string): Promise<
             throw new TuiInstallError(`The archive's ${TUI_BINARY} is ${size} bytes; refusing it.`);
           }
           out = await open(destination, 'wx', 0o700);
-          written = size;
+          found = true;
         }
       }
     }
@@ -400,7 +406,7 @@ async function extractBinary(archivePath: string, destination: string): Promise<
     gunzip.destroy();
   }
   throw new TuiInstallError(
-    out === undefined && written === 0
+    !found
       ? `The release archive contains no ${TUI_BINARY}.`
       : `The release archive ends in the middle of ${TUI_BINARY}.`,
   );
@@ -438,8 +444,11 @@ function tarSize(block: Buffer): number {
 /**
  * One signal that aborts on the caller's signal or after a timeout.
  * (`AbortSignal.any` needs Node 20.3; the plugin supports 18.)
+ * @param outer - the caller's signal, if any.
+ * @param timeoutMs - delay after which the signal aborts on its own.
+ * @returns the linked signal, and `dispose` to release the timer and listener.
  */
-function linkedSignal(
+export function linkedSignal(
   outer: AbortSignal | undefined,
   timeoutMs: number,
 ): { signal: AbortSignal; dispose(): void } {
@@ -455,4 +464,13 @@ function linkedSignal(
       outer?.removeEventListener('abort', abort);
     },
   };
+}
+
+/**
+ * The message of a thrown value.
+ * @param error - anything caught.
+ * @returns its `message` for an `Error`, else its string form.
+ */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
