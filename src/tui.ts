@@ -518,7 +518,8 @@ async function changedWithin(
   stop.addEventListener('abort', end, { once: true });
   try {
     await terminal.changed(revision, wait.signal);
-    return true;
+    // Trust the revision, not the return: a wait that merely ended is not output.
+    return terminal.revision > revision;
   } catch (error) {
     if (wait.signal.aborted) return false;
     throw error;

@@ -299,6 +299,26 @@ console.log('\n[3] shells that behave differently');
   const noisyTerminal = (noisy.opened[0] as Opened).terminal;
   check('typing waits for startup output to stop', noisyTerminal.screen.startsWith('......'));
 
+  // A terminal whose `changed` resolves when its wait is aborted, without any
+  // output. Counting that as output would restart the quiet timer forever.
+  const lax = host({
+    prepare: (terminal) => {
+      terminal.screen = '$ ';
+      terminal.changed = (_after, signal) =>
+        new Promise<number>((resolve) => {
+          signal.addEventListener('abort', () => resolve(terminal.revision), { once: true });
+        });
+    },
+  });
+  const started = Date.now();
+  await tui(lax, {
+    timings: { startupQuietMs: 20, startupTimeoutMs: 2000, launchWatchMs: 20 },
+  }).run({ agent: agent('s', [BIN]) }, '');
+  check(
+    'a wait that ends without output does not reset the quiet timer',
+    Date.now() - started < 1000,
+  );
+
   const keyless = host();
   await tui(keyless, { apiKey: undefined }).run({ agent: agent('s', [BIN]) }, '');
   check(

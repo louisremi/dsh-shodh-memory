@@ -10,8 +10,11 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Context, type Plugin, Service } from '@deepseek-ai/cordis';
 import { ShodhClient } from '../src/client.js';
 import type {
@@ -173,6 +176,11 @@ class AgentsStub extends Service {
 }
 
 // ── boot the plugin ──────────────────────────────────────────────────────────
+
+// `/shodh tui` keeps its state under the DSH home. Point that at a scratch
+// directory so this suite never creates anything in the real `~/.dsh`.
+const scratchHome = await mkdtemp(join(tmpdir(), 'shodh-smoke-home-'));
+process.env.DSH_HOME = scratchHome;
 
 const logs: Array<[string, string]> = [];
 const ctx = new Context();
@@ -518,10 +526,11 @@ class TerminalControllerStub extends Service {
       return {
         info: { state: 'running', control: 'agent', exitCode: null },
         revision: 1,
-        // Nothing more is ever printed: resolve only when the wait is aborted.
+        // Nothing more is ever printed, so a wait only ends by being aborted —
+        // and then rejects, as the real terminal's does.
         changed: (_after: number, signal: AbortSignal) =>
-          new Promise<number>((resolve) => {
-            signal.addEventListener('abort', () => resolve(1), { once: true });
+          new Promise<number>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
           }),
         write: async (data: string) => {
           terminalWrites.push(data);
@@ -549,6 +558,10 @@ const tuiOut = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' 
 check('with terminal services /shodh tui succeeds', tuiOut.kind === 'success');
 check('one sidebar terminal requested', terminalRequests.length === 1);
 check('titled "Shodh memory"', terminalRequests[0]?.title === 'Shodh memory');
+check(
+  'it starts in the plugin state directory',
+  terminalRequests[0]?.cwd === join(scratchHome, 'plugins', 'shodh-memory', 'tui'),
+);
 check(
   'the TUI is pointed at the configured server',
   terminalRequests[0]?.env?.SHODH_SERVER_URL === baseUrl,
@@ -656,4 +669,5 @@ console.log('\n[13] teardown');
 check('disposing the plugin closes the TUI terminal it still controls', terminalClosed);
 console.log(`\n${passed} checks passed.\n`);
 server.close();
+await rm(scratchHome, { recursive: true, force: true });
 process.exit(0);

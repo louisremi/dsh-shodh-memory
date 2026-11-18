@@ -487,7 +487,7 @@ injected block fails here even if search output looks right.
 
 The smoke test boots a real cordis context with stub services against a fake
 shodh HTTP server, then drives the same events the harness would and asserts on
-what actually reached the wire — the contract, not the internals. 65 checks
+what actually reached the wire — the contract, not the internals. 66 checks
 covering capture, the no-feedback-loop guarantee, recall budgeting and reuse
 gap, all three tools (including that a long memory survives `memory_search`'s
 render whole), the slash command including `/shodh tui`, circuit-breaker
@@ -616,8 +616,8 @@ src/
 test/
   format.test.ts       24-check unit test for the two rendering budgets
   tui-install.test.ts  40-check test of the download, digest check, and unpack
-  tui.test.ts          82-check test of /shodh tui against a fake terminal
-  smoke.test.ts        65-check end-to-end test against a fake shodh
+  tui.test.ts          83-check test of /shodh tui against a fake terminal
+  smoke.test.ts        66-check end-to-end test against a fake shodh
   overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
 .github/workflows/    CI, plus release automation (tag → release → npm)
