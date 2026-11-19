@@ -14,7 +14,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { Context, type Plugin, Service } from '@deepseek-ai/cordis';
 import { ShodhClient } from '../src/client.js';
 import type {
@@ -875,13 +875,14 @@ async function bootShodh(
 llmCalls.length = 0;
 llmRequests.length = 0;
 const { command: cleanupCommand, context: freshCtx } = await bootShodh({
-  // Per-workspace tenants, so two agents below resolve to different tenants
-  // and the plugin's default client tenant (`dsh-<cwd>`) differs from both.
+  // Per-session tenants: these agents carry a cwd only where DSH's real Agent
+  // does (`session.header.cwd`), never `workspaceCwd`, and the plugin's default
+  // client tenant (`dsh-<process cwd>`) differs from both.
   userIdScope: 'workspace',
   cleanup: { timeoutMs: 20000 },
 });
-const alpha = { workspace: { cwd: '/work/alpha' } };
-const beta = { workspace: { cwd: '/work/beta' } };
+const alpha = { session: { header: { cwd: '/work/alpha' } } };
+const beta = { session: { header: { cwd: '/work/beta' } } };
 const cleanupStart = received.length;
 
 const cleanupOut = await cleanupCommand.handler({ rawInput: 'cleanup', agent: alpha });
@@ -981,6 +982,22 @@ const crossApply = await cleanupCommand.handler({ rawInput: 'cleanup apply all',
 check('another tenant cannot apply the report', crossApply.kind === 'error');
 check('…and is told it has no report of its own', crossApply.text.includes('dsh-beta'));
 check('…and nothing was written', wrote().length === 0);
+
+// Issue #30: the process directory is the documented fallback only for a call
+// that carries no session cwd at all — not for every call in a container.
+const processLabel =
+  basename(process.cwd())
+    .replace(/[^A-Za-z0-9._@-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '') || 'default';
+const noSession = await cleanupCommand.handler({
+  rawInput: 'cleanup apply all',
+  agent: { id: 'no-session-cwd' },
+});
+check('an agent without a session cwd fails as a separate tenant', noSession.kind === 'error');
+check(
+  '…naming the harness process directory, the documented fallback',
+  noSession.text.includes(`dsh-${processLabel}`),
+);
 
 // Spec 7: a bad selection token refuses the whole command.
 const typoApply = await cleanupCommand.handler({ rawInput: 'cleanup apply 1,x', agent: alpha });

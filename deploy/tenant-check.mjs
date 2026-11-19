@@ -56,12 +56,16 @@ await plugin.apply(ctx, {
   userIdScope: 'workspace',
 });
 
-// Find the save tool and invoke it with an agent whose cwd has a space.
+// Find the save tool and invoke it with an agent whose session cwd has a space.
 const save = tools.find((t) => t?.name === 'memory_save');
 const marker = `tenant-space-check-${Date.now()}`;
 const res = await save.execute(
   { content: marker, type: 'Decision' },
-  { agent: { workspaceCwd: '/workspace/My Project With Spaces' } },
+  {
+    agent: {
+      session: { id: 'tenant-check', header: { cwd: '/workspace/My Project With Spaces' } },
+    },
+  },
 );
 console.log('[tenant] save result:', JSON.stringify(res).slice(0, 200));
 const ok = res?.saved === true && typeof res?.id === 'string';

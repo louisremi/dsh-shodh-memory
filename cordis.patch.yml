@@ -17,11 +17,10 @@
 #   userIdScope     'global'    — one tenant for the whole harness (default):
 #                                 every session, workspace and profile sharing
 #                                 this userId reads and writes the same memory.
-#                   'workspace' — `dsh-<basename(harness cwd)>`, resolved once
-#                                 at startup, so harnesses started from
-#                                 different directories get different tenants.
-#                                 The Web app serves every workspace from one
-#                                 process, so its workspaces share that tenant.
+#                   'workspace' — `dsh-<basename(session cwd)>`, so sessions
+#                                 in different projects get different tenants.
+#                                 A call with no session cwd falls back to the
+#                                 harness process directory.
 #
 # ── resilience ───────────────────────────────────────────────────────────────
 #   requestTimeoutMs  default per-call budget.

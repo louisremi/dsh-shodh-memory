@@ -122,11 +122,10 @@ export class ShodhClient {
   /**
    * The tenant a call belongs to.
    *
-   * `this.userId` is the process default — already the workspace tenant when
-   * `userIdScope: 'workspace'`. A caller holding an agent may pass a more
-   * specific tenant via `options.userId`; without one every call still lands in
-   * the right tenant, which is what keeps event-driven capture — where no agent
-   * is attached to the event — in the caller's namespace.
+   * `this.userId` is the process default — the harness directory's tenant under
+   * `userIdScope: 'workspace'`. A caller holding an agent passes that session's
+   * tenant via `options.userId`; a call with no override (an event with no
+   * agent attached) still lands in the process tenant, never an empty id.
    *
    * @param options - the call options, possibly carrying `userId`.
    * @returns the tenant id to send.
