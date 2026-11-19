@@ -125,6 +125,7 @@ Human-facing control that costs the model nothing:
 /shodh forget <id>       Delete one memory                     (alias: delete)
 /shodh tui               Open the shodh dashboard in the right panel
 /shodh tui install       Download the shodh-tui binary (or a [version] of it)
+/shodh tui clean [all]   Remove downloaded binaries it no longer runs
 /shodh help              Usage
 ```
 
@@ -140,6 +141,7 @@ at the server and API key this plugin is configured with.
 ```
 /shodh tui install       once: fetch the binary matching your server version
 /shodh tui               open the dashboard
+/shodh tui clean         after upgrades: delete the versions it no longer runs
 ```
 
 In the Web app, the right panel's start page also gets a **Shodh memory** card
@@ -159,6 +161,14 @@ and then opens the TUI. The card lives in
 - **Costs the model nothing.** No tool and no prompt text is added.
 - **Pick your profile.** The TUI opens on its own profile selector. The command
   result names the tenant this session writes to (for example `dsh-my-project`).
+- **Keeps up with your server.** When the server reports a version you have
+  not installed (after a server upgrade, say), `/shodh tui` still opens the
+  newest TUI you have and adds a line naming both versions and
+  `/shodh tui install`. Setting `tui.version` silences it.
+- **Downloads pile up, until you clean.** Each installed version stays under
+  `$DSH_HOME/plugins/shodh-memory/tui/<tag>/` (about 3 MB). `/shodh tui clean`
+  deletes all but the one `/shodh tui` runs; `/shodh tui clean all` deletes
+  every one. A TUI already open keeps running.
 - **One per session.** A second `/shodh tui` points at the open tab. Quit the
   TUI with `q` and the terminal ends; run the command again for a new one.
 
@@ -177,7 +187,7 @@ it on `PATH`.
 
 | | |
 |---|---|
-| **DeepSeek Harness** | `dsh` 0.1.6-alpha.1 (developed against; earlier 0.1.x should work). `/shodh tui` needs the Web or Desktop app (built against the terminal controller in 0.2.2-rc.2) |
+| **DeepSeek Harness** | `dsh` 0.1.6-alpha.1 (developed against; earlier 0.1.x should work). `/shodh tui` needs the Web or Desktop app. It and the start-page card were run on 0.2.2-rc.2; the test suite checks the card's DSH interfaces against the pinned DSH packages, 0.2.2-rc.5 today (see [Testing status](#testing-status--please-read)) |
 | **shodh-memory** | Any build exposing the HTTP API — binary, Docker, or `shodh server` |
 | **Node.js** | ≥ 18 (uses the global `fetch`) |
 | **pnpm** | Required only for `dsh plugin add` |
@@ -501,7 +511,7 @@ injected block fails here even if search output looks right.
 
 The smoke test boots a real cordis context with stub services against a fake
 shodh HTTP server, then drives the same events the harness would and asserts on
-what actually reached the wire — the contract, not the internals. 66 checks
+what actually reached the wire — the contract, not the internals. 67 checks
 covering capture, the no-feedback-loop guarantee, recall budgeting and reuse
 gap, all three tools (including that a long memory survives `memory_search`'s
 render whole), the slash command including `/shodh tui`, circuit-breaker
@@ -513,6 +523,13 @@ HTTP server and a tar.gz built in memory, and pins that a digest mismatch or a
 missing digest installs nothing and that only `shodh-tui` ever reaches the disk.
 `tui.test.ts` drives `/shodh tui` against a fake sidebar terminal and pins the
 launch request, the one line typed into the shell, and every refusal.
+
+The start-page card has two. `client.test.ts` loads `client/index.js` against
+fakes and pins what it registers and runs. `dsh-contract.test.ts` reads the
+real DSH packages the card plugs into, which are pinned dev dependencies that
+Dependabot moves: the two slot names, the tab-registry fields, and every
+theme variable the card's CSS uses. A DSH release that renames one fails there,
+not as a missing or unstyled card.
 
 To boot the plugin inside a real harness without publishing it:
 
@@ -545,9 +562,12 @@ client and the running binary agree. If a future server version changes a shape,
 terminal controller, PTY provider, and Linux sandbox of dsh 0.2.2-rc.2, with the
 real v0.2.0 arm64 `shodh-tui`: install from GitHub, launch, the profile selector
 rendering, quitting with `q`, and the same under `workspace-write` and
-`read-only` sandbox modes. **Not yet exercised:** the tab in a browser, and the
-dashboard itself against a server that has memories — the run above had no shodh
-server, so it stopped at the selector's "Cannot connect".
+`read-only` sandbox modes. Then in the DSH 0.2.2-rc.2 Web app, against a local
+shodh 0.2.0 server holding memories: the start-page card opening the TUI in a
+right-panel tab, picking the session's profile, and the dashboard showing
+memories as a session saved, replaced, and recalled them (the screenshot at the
+top). **Not yet exercised in a browser:** the card's Install button, since the
+binary was already installed on that machine; the test suite covers it.
 
 ### Contributing
 
@@ -634,9 +654,10 @@ client/
 test/
   format.test.ts       24-check unit test for the two rendering budgets
   tui-install.test.ts  39-check test of the download, digest check, and unpack
-  tui.test.ts          87-check test of /shodh tui against a fake terminal
+  tui.test.ts          98-check test of /shodh tui against a fake terminal
   client.test.ts       28-check test of the card's commands, replies, and Install offer
-  smoke.test.ts        66-check end-to-end test against a fake shodh
+  dsh-contract.test.ts 34-check test of the card against the real DSH packages
+  smoke.test.ts        67-check end-to-end test against a fake shodh
   overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
 .github/workflows/    CI, plus release automation (tag → release → npm)
