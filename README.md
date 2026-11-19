@@ -153,10 +153,10 @@ Apply only trusts what the analysis actually showed the model:
   memory still truncated, or cut at the 1,200-char line cap, can be proposed
   for deletion but never merged.
 - **Your tenant, your report.** Reports are keyed by tenant, so a different
-  tenant cannot apply yours. Under the default `global` scope every workspace
-  is the same tenant, so this guard only separates you from other tenants on
-  the server. A report expires after 30 minutes, and a proposal already
-  applied is skipped if you apply again.
+  tenant cannot apply yours. Under `userIdScope: workspace` that is each
+  project; under the default `global` it is other tenants on the server. A
+  report expires after 30 minutes, and a proposal already applied is skipped
+  if you apply again.
 - **Strict numbers.** `apply 1,x` is refused outright rather than quietly
   applying `1`.
 - **One budget.** `timeoutMs` bounds the whole pass — listing, full-text
@@ -463,7 +463,7 @@ by targeting the row `id: shodh-memory` in `$DSH_HOME/cordis.patch.yml` or a
 | `baseUrl` | `http://127.0.0.1:3030` | shodh HTTP root. Env override: `SHODH_API_URL` |
 | `apiKeyEnv` | `SHODH_API_KEY` | Name of the env var holding the key |
 | `userId` | `dsh` | shodh tenant. Env override: `SHODH_USER_ID` |
-| **`userIdScope`** | `global` | **`global` = one tenant for the whole harness; `workspace` = a tenant keyed to the directory the harness process started in** |
+| **`userIdScope`** | `global` | **`global` = one tenant for the whole harness; `workspace` = a tenant per session project directory (`dsh-<dirname>`)** |
 | `autoRecall.maxChars` | `1200` | The single biggest token-cost control |
 | `autoRecall.enabled` | `true` | Off = tools-only, near-zero standing cost |
 | `autoRecall.reuseGapTurns` | `8` | Don't re-inject a memory still in context |
@@ -494,13 +494,19 @@ memories. That is deliberate. A decision recorded in one repo comes back in
 another, and a personal harness keeps one memory rather than a separate store
 per directory.
 
-`userIdScope: 'workspace'` is the opt-in alternative. It derives the tenant
-from the directory the harness process was started in — `dsh-<basename>` — and
-resolves it once, at startup. Harness processes started from different
-directories therefore get different tenants. The Web and Desktop apps serve
-every workspace from one process, so workspaces opened there share that
-process's tenant; to separate projects inside one GUI, run a second harness
-process from the other directory, or give it a different `userId`.
+`userIdScope: 'workspace'` is the opt-in alternative. The tenant follows the
+session's own project directory — `dsh-<basename(session cwd)>` — so a decision
+made in one repo stops surfacing in an unrelated one, including between
+workspaces served by the same GUI. A call with no session cwd (a background
+event with no agent attached) falls back to the harness process's directory, so
+capture still lands in a stable tenant.
+
+> **Upgrading from `userIdScope: workspace`?** Earlier versions resolved the
+> tenant from the harness process directory, so a containerised harness put
+> every project in one tenant. Those memories live under `dsh-<process
+> directory>`. To keep reading them, set `userIdScope: global` and
+> `userId: dsh-<process directory>`; otherwise new memories start landing in
+> per-project tenants.
 
 ---
 
@@ -556,9 +562,8 @@ dead server. It self-heals on the next successful probe — you'll see
 
 **Memories from another project are showing up**
 That is the default: `userIdScope: 'global'` keeps one tenant for the whole
-harness. Set `userIdScope: 'workspace'` for a tenant keyed to the directory the
-harness process was started in (the Web app serves every workspace from that
-one process), or change `userId` to a separate tenant.
+harness. Set `userIdScope: 'workspace'` to key each session to its own project
+directory, or change `userId` to a separate tenant.
 
 **Recall feels noisy / irrelevant memories injected**
 Lower `autoRecall.maxResults`, or lower `maxChars` so fewer lines fit.
@@ -586,9 +591,8 @@ It reaches the server from the machine running DSH, with the plugin's `baseUrl`
 and key. Check `/shodh status`; if that is healthy the TUI will be too.
 
 **The TUI is empty**
-Pick the profile `/shodh tui` named. Under `userIdScope: workspace` the tenant
-follows the directory the harness process was started in, so its memories live
-under that tenant.
+Pick the profile `/shodh tui` named. Under `userIdScope: workspace` each
+project has its own tenant (`dsh-<dirname>`).
 
 **`duplicate bundle id` on boot**
 The `shodh-memory` row was added both by the bundle and manually to your

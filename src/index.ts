@@ -108,8 +108,8 @@ export function apply(ctx: ShodhContext, config: unknown): void {
     baseUrl: cfg.baseUrl,
     apiKey,
     // Resolved, not raw: under `userIdScope: 'workspace'` the process default is
-    // the tenant of the harness's own directory, so event-driven capture — which
-    // has no agent attached to the event — still lands in the right tenant.
+    // the harness directory's tenant, which is the fallback for event-driven
+    // capture — those events can arrive with no agent attached.
     userId: resolveUserId(undefined),
     requestTimeoutMs: cfg.requestTimeoutMs,
     failureThreshold: cfg.failureThreshold,
@@ -124,19 +124,19 @@ export function apply(ctx: ShodhContext, config: unknown): void {
    * harness: every session, workspace and profile using this server with that
    * userId shares it.
    *
-   * `workspace` derives the tenant from the harness process's working directory
-   * (`dsh-<basename>`), fixed once at startup. An agent carrying a workspace
-   * path can override it per call, but DSH exposes the session's cwd
-   * (`agent.session.header.cwd`) rather than the `workspace` fields `AgentRef`
-   * looks for, so the process directory is what applies in practice: one tenant
-   * per harness process, shared by every workspace that process serves.
+   * `workspace` keys the tenant to the session's project directory
+   * (`dsh-<basename>`), so sessions working in different projects get different
+   * tenants — including inside one GUI process. A call with no session cwd (a
+   * background event with no agent attached) falls back to the harness process
+   * directory, which keeps capture in a stable tenant instead of nowhere.
    *
    * @param agent - the agent making the call, if any.
    * @returns the tenant id.
    */
   function resolveUserId(agent?: AgentRef): string {
     if (cfg.userIdScope !== 'workspace') return cfg.userId;
-    const cwd = agent?.workspaceCwd ?? agent?.workspace?.cwd ?? process.cwd();
+    const cwd =
+      agent?.session?.header?.cwd ?? agent?.workspaceCwd ?? agent?.workspace?.cwd ?? process.cwd();
     const label = sanitizeTenant(basename(String(cwd)) || 'default');
     return `dsh-${label}`;
   }

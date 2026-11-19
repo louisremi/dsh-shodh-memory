@@ -83,7 +83,7 @@ for (const fn of byName['session/event'] ?? []) {
 await new Promise((r) => setTimeout(r, 1500));
 
 // 2. Fire a pre-step with a matching prompt -> should recall.
-const agent = { session: { id: 's1' }, workspaceCwd: '/workspace/activity-test' };
+const agent = { session: { id: 's1', header: { cwd: '/workspace/activity-test' } } };
 for (const fn of byName['agent/pre-step'] ?? []) {
   const decision = {
     kind: 'enter',

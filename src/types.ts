@@ -35,7 +35,9 @@ export interface ShodhLogger {
 /** A reference to the agent that triggered a call, as far as we inspect it. */
 export interface AgentRef {
   id?: string;
-  session?: { id?: string };
+  /** The live agent's session; its header carries the project directory. */
+  session?: { id?: string; header?: { cwd?: string } };
+  /** Alternate sources for the project directory, when a caller carries it on the agent. */
   workspaceCwd?: string;
   workspace?: { cwd?: string };
   /** The agent's own context; selects the session's execution providers. */
