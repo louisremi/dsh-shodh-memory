@@ -356,12 +356,9 @@ async function cleanupResult(
       text: 'Usage: /shodh cleanup  — or —  /shodh cleanup apply <n,n> | all',
     };
   }
-  const text =
-    kind === 'run'
-      ? await runCleanup(cleanupDeps, userId, invocation.signal)
-      : await applyCleanup(cleanupDeps, userId, inputAfterApply(invocation), invocation.signal);
-  const failed = text.startsWith('Cleanup unavailable:');
-  return { kind: failed ? 'error' : 'success', text };
+  return kind === 'run'
+    ? runCleanup(cleanupDeps, userId, invocation.signal)
+    : applyCleanup(cleanupDeps, userId, inputAfterApply(invocation), invocation.signal);
 }
 
 /** The argument after `apply`: proposal numbers or `all`. */

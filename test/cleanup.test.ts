@@ -255,13 +255,20 @@ console.log('\n[cleanup] applyCleanup re-checks a stored report');
 // something had minted entries into it, and assert that apply still refuses
 // every write the analysis did not justify.
 const writes: string[] = [];
+/** When set, `forget` waits for the call's signal and rejects with its reason. */
+let hangDeletes = false;
 const fakeClient = {
   updateMemory: async (id: string) => {
     writes.push(`PUT ${id}`);
     return {};
   },
-  soft: async (path: string, _body: unknown, options: { method?: string }) => {
-    writes.push(`${options.method} ${path}`);
+  forget: async (id: string, options: { userId?: string; signal?: AbortSignal }) => {
+    if (hangDeletes) {
+      await new Promise((_resolve, reject) => {
+        options.signal?.addEventListener('abort', () => reject(options.signal?.reason));
+      });
+    }
+    writes.push(`DELETE ${id} as ${options.userId}`);
     return {};
   },
 } as unknown as ShodhClient;
@@ -289,39 +296,57 @@ const tamper = (proposals: CleanupReport['proposals']): void => {
 };
 
 tamper([{ op: 'delete', ids: ['never-seen'] }]);
-let out = await applyCleanup(deps, 't', 'all');
+let out = (await applyCleanup(deps, 't', 'all')).text;
 check('a delete of an id the model never saw is refused', out.includes('#1 skipped'));
 check('…with no write', writes.length === 0);
 
 tamper([{ op: 'merge', ids: ['whole', 'seen'], into: 'whole', text: 'x' }]);
-out = await applyCleanup(deps, 't', 'all');
+out = (await applyCleanup(deps, 't', 'all')).text;
 check('a merge naming a cut/truncated memory is refused', out.includes('#1 skipped'));
 check('…with no write', writes.length === 0);
 
 tamper([{ op: 'merge', ids: ['whole', 'whole2'], into: 'elsewhere', text: 'x' }]);
-out = await applyCleanup(deps, 't', 'all');
+out = (await applyCleanup(deps, 't', 'all')).text;
 check('a merge whose target is outside its ids is refused', out.includes('#1 skipped'));
 check('…with no write', writes.length === 0);
 
 tamper([{ op: 'delete', ids: ['seen'] }]);
-out = await applyCleanup(deps, 'someone-else', 'all');
-check("another tenant's report is invisible", out.includes('nothing to apply'));
+const crossTenant = await applyCleanup(deps, 'someone-else', 'all');
+check(
+  "another tenant's report is invisible",
+  crossTenant.kind === 'error' && crossTenant.text.includes('nothing to apply'),
+);
+check(
+  '…reported as a refused request, not as cleanup being unavailable',
+  crossTenant.text.startsWith('Cleanup apply refused:'),
+);
 check('…with no write', writes.length === 0);
 
 tamper([{ op: 'delete', ids: ['seen'] }]);
 const stale = state.cleanupReports.get('t');
 if (stale) stale.created = Date.now() - CLEANUP_REPORT_TTL_MS - 1;
-out = await applyCleanup(deps, 't', 'all');
+out = (await applyCleanup(deps, 't', 'all')).text;
 check('an expired report is refused', out.includes('older than'));
 check('…with no write', writes.length === 0);
 check('…and dropped', !state.cleanupReports.has('t'));
 
 tamper([{ op: 'delete', ids: ['seen'] }]);
-out = await applyCleanup(deps, 't', 'all');
+out = (await applyCleanup(deps, 't', 'all')).text;
 check('a legitimate delete goes through', out.includes('#1 deleted 1'));
-check(
-  '…as exactly one DELETE in the report tenant',
-  writes.join() === 'DELETE /api/memory/seen?user_id=t',
-);
+check('…as exactly one DELETE in the report tenant', writes.join() === 'DELETE seen as t');
+
+// A cancellation that lands mid-delete is reported as a cancellation, not as
+// a failed delete, and the proposal stays retryable.
+writes.length = 0;
+tamper([{ op: 'delete', ids: ['seen'] }]);
+hangDeletes = true;
+const cancel = new AbortController();
+const pendingApply = applyCleanup(deps, 't', 'all', cancel.signal);
+setTimeout(() => cancel.abort(new Error('user stopped it')), 20);
+const cancelled = await pendingApply;
+hangDeletes = false;
+check('a cancelled delete says cancelled', cancelled.text.includes('#1 cancelled mid-way'));
+check('…not that the delete failed', !cancelled.text.includes('could not delete'));
+check('…and the proposal stays retryable', !state.cleanupReports.get('t')?.applied.has(0));
 
 console.log(`\n${passed} cleanup unit checks passed.\n`);

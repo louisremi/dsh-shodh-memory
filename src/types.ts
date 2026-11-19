@@ -148,11 +148,7 @@ export interface StreamChunkLike {
 export interface LlmRuntimeLike {
   listProviders(): { id: string; name?: string }[];
   listModels(provider: string): Promise<{ id: string }[]>;
-  prepareCall(
-    config: JsonRecord,
-    signal?: AbortSignal,
-    configure?: (controls: JsonRecord, model: JsonRecord) => JsonRecord,
-  ): Promise<PreparedLlmCallLike>;
+  prepareCall(config: JsonRecord, signal?: AbortSignal): Promise<PreparedLlmCallLike>;
 }
 
 /** One prepared call: dispatch once, with the request's config fields matching `config`. */
@@ -176,8 +172,6 @@ export interface ListMemoryItem {
   content: string;
   /** True when `content` is a server-side preview cut short of the full text. */
   truncated: boolean;
-  /** True character length of the full content, when the server reports it. */
-  length?: number;
   type: string;
   importance: number;
   tags: string[];

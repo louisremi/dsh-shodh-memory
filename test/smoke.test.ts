@@ -985,7 +985,10 @@ check('…and nothing was written', wrote().length === 0);
 // Spec 7: a bad selection token refuses the whole command.
 const typoApply = await cleanupCommand.handler({ rawInput: 'cleanup apply 1,x', agent: alpha });
 check('a typo in the selection is refused, not ignored', typoApply.kind === 'error');
-check('…naming the bad token', typoApply.text.includes('not a proposal number: x'));
+check(
+  '…naming the bad token, as a refusal rather than "unavailable"',
+  typoApply.text.startsWith('Cleanup apply refused: not a proposal number: x'),
+);
 check('…and nothing was written', wrote().length === 0);
 
 const applyOut = await cleanupCommand.handler({ rawInput: 'cleanup apply 1', agent: alpha });

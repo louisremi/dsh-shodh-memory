@@ -55,6 +55,22 @@ export interface CleanupDeps {
   BlockAssembler?: BlockAssemblerCtor;
 }
 
+/** A resolved model route: which provider, which of its models. */
+export interface LlmRoute {
+  provider: string;
+  model: string;
+}
+
+/**
+ * What a cleanup command produced. `kind` is decided where the outcome is
+ * known, never re-derived from the text: `error` covers both "cleanup cannot
+ * run here" and "that input is wrong".
+ */
+export interface CleanupResult {
+  kind: 'success' | 'error';
+  text: string;
+}
+
 /** The assembled one-shot request. Structural: it carries live objects, so not a JsonRecord. */
 interface RequestOptions {
   [key: string]: unknown;
@@ -114,19 +130,20 @@ export async function runCleanup(
   deps: CleanupDeps,
   tenant: string,
   signal?: AbortSignal,
-): Promise<string> {
-  const { ctx, client, cfg } = deps;
+): Promise<CleanupResult> {
+  const { ctx, client, cfg, createUserMessage, BlockAssembler } = deps;
 
   // `llm` is a soft capability, deliberately not in `inject`. Reading an
   // un-injected service as a property throws in cordis, so look it up with
   // `get`, which answers `undefined` when the profile has no llm service.
   const llm = ctx.get?.('llm') as LlmRuntimeLike | undefined;
-  if (!llm) return errorText('no LLM service is available in this profile, so cleanup cannot run.');
-  if (!deps.createUserMessage || !deps.BlockAssembler) {
-    return errorText('@deepseek-ai/dsh-llm is unavailable, so cleanup cannot run.');
+  if (!llm)
+    return unavailable('no LLM service is available in this profile, so cleanup cannot run.');
+  if (!createUserMessage || !BlockAssembler) {
+    return unavailable('@deepseek-ai/dsh-llm is unavailable, so cleanup cannot run.');
   }
   const route = await resolveRoute(llm, cfg);
-  if (!route) return errorText('no LLM provider is registered, so cleanup cannot run.');
+  if (!route) return unavailable('no LLM provider is registered, so cleanup cannot run.');
 
   // One budget for the whole pass: listing, full-text fetches, and the model.
   const deadline = newDeadline(signal, cfg.cleanup.timeoutMs);
@@ -134,13 +151,13 @@ export async function runCleanup(
     // ── inventory ────────────────────────────────────────────────────────────
     const { items, scanned, total } = await collectMemories(client, cfg, tenant, deadline.signal);
     if (items === null) {
-      return errorText(
+      return unavailable(
         'the shodh server does not expose the memory list endpoint (`POST /api/memories`); ' +
           'the circuit may also be open. Check `/shodh status`, then retry.',
       );
     }
     if (scanned === 0) {
-      return `Cleanup found nothing to analyze: tenant \`${tenant}\` has no memories.`;
+      return success(`Cleanup found nothing to analyze: tenant \`${tenant}\` has no memories.`);
     }
 
     // Full text for truncated previews, newest first (the corpus keeps the
@@ -153,7 +170,12 @@ export async function runCleanup(
 
     // ── one-shot LLM pass ────────────────────────────────────────────────────
     const { corpus, dropped, seenIds, fullIds } = renderCorpus(items, cfg.cleanup.maxInputBytes);
-    const text = await askLlm(deps, llm, route, corpus, deadline.signal);
+    const text = await askLlm(
+      { llm, route, createUserMessage, BlockAssembler },
+      cfg.cleanup.maxOutputTokens,
+      corpus,
+      deadline.signal,
+    );
     const proposals = parseProposals(text).filter((p) => proposalAllowed(p, seenIds, fullIds));
     await chooseKeepers(client, tenant, proposals, items, deadline.signal);
     const report: CleanupReport = {
@@ -165,13 +187,13 @@ export async function runCleanup(
       applied: new Set(),
     };
     deps.state.cleanupReports.set(tenant, report);
-    return renderCleanupReport(report, { scanned, total, dropped });
+    return success(renderCleanupReport(report, { scanned, total, dropped }));
   } catch (reason) {
     const message =
       reason === CLEANUP_TIMEOUT
         ? `cleanup timed out after ${Math.round(cfg.cleanup.timeoutMs / 1000)}s`
         : describeError(reason);
-    return errorText(`${message}; nothing was changed.`);
+    return unavailable(`${message}; nothing was changed.`);
   } finally {
     deadline.dispose();
   }
@@ -191,22 +213,22 @@ export async function applyCleanup(
   tenant: string,
   spec: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<CleanupResult> {
   const report = deps.state.cleanupReports.get(tenant);
   if (!report || report.proposals.length === 0) {
-    return errorText(
+    return refused(
       `nothing to apply for tenant \`${tenant}\`: run \`/shodh cleanup\` first to get a proposal report.`,
     );
   }
   if (Date.now() - report.created > CLEANUP_REPORT_TTL_MS) {
     deps.state.cleanupReports.delete(tenant);
-    return errorText(
+    return refused(
       `the last report is older than ${CLEANUP_REPORT_TTL_MS / 60_000} minutes and the store ` +
         'may have changed since. Run `/shodh cleanup` again.',
     );
   }
   const selection = parseSelection(spec, report.proposals.length);
-  if ('error' in selection) return errorText(selection.error);
+  if ('error' in selection) return refused(selection.error);
 
   const pending = selection.indexes.filter((index) => !report.applied.has(index));
   const already = selection.indexes.filter((index) => report.applied.has(index));
@@ -245,8 +267,15 @@ export async function applyCleanup(
         const forgotten: string[] = [];
         const missed: string[] = [];
         for (const id of rest) {
-          if (await forgetQuiet(deps.client, id, options)) forgotten.push(id);
-          else missed.push(id);
+          try {
+            await deps.client.forget(id, options);
+            forgotten.push(id);
+          } catch (error) {
+            // A cancellation is not a failed delete: let the outer catch
+            // report it as such, with what was and wasn't attempted.
+            if (deadline.signal.aborted) throw error;
+            missed.push(id);
+          }
         }
         if (forgotten.length > 0) lines.push(`     forgot ${forgotten.join(', ')}`);
         if (missed.length > 0) {
@@ -284,7 +313,7 @@ export async function applyCleanup(
   }
 
   lines.unshift(`Applied ${done} proposal(s), ${failed} problem(s):`);
-  return lines.join('\n');
+  return success(lines.join('\n'));
 }
 
 /**
@@ -438,7 +467,7 @@ async function collectMemories(
       // First page failing (outage, breaker) means nothing to analyze yet;
       // later pages failing just truncates the scan we already have.
       if (offset === 0) return { items: null, scanned: 0, total: 0 };
-      deps_debug(client, error);
+      logPageFailure(client, error);
       break;
     }
     const raw = Array.isArray(response?.memories)
@@ -478,7 +507,6 @@ function normalizeListItem(raw: unknown): ListMemoryItem {
     id: string(record.id, experience.id),
     content: string(record.content, experience.content),
     truncated: truncatedFlag === true,
-    length: number(record.content_length, record.contentLength),
     type: string(record.memory_type, record.memoryType, experience.memory_type) || 'Observation',
     importance: number(record.importance) ?? 0,
     tags: Array.isArray(record.tags)
@@ -514,10 +542,7 @@ async function fillOne(
 // ── the LLM pass ─────────────────────────────────────────────────────────────
 
 /** Resolve the route: explicit config pair, else first provider's first model. */
-async function resolveRoute(
-  llm: LlmRuntimeLike,
-  cfg: ShodhConfig,
-): Promise<{ provider: string; model: string } | undefined> {
+async function resolveRoute(llm: LlmRuntimeLike, cfg: ShodhConfig): Promise<LlmRoute | undefined> {
   const { provider, model } = cfg.cleanup;
   if (provider !== undefined && model !== undefined) return { provider, model };
   const first = llm.listProviders()[0];
@@ -575,23 +600,26 @@ export function renderCorpus(items: ListMemoryItem[], maxInputBytes: number): Co
   return { corpus: kept.join('\n'), dropped: items.length - kept.length, seenIds, fullIds };
 }
 
+/** Everything one model call needs, already checked present by {@link runCleanup}. */
+interface LlmCallKit {
+  llm: LlmRuntimeLike;
+  route: LlmRoute;
+  createUserMessage: CreateUserMessage;
+  BlockAssembler: BlockAssemblerCtor;
+}
+
 /**
  * One prepared one-shot LLM call. Mirrors upstream's session-title-llm:
  * request config = prepared config, spread verbatim.
  */
 async function askLlm(
-  deps: CleanupDeps,
-  llm: LlmRuntimeLike,
-  route: { provider: string; model: string },
+  { llm, route, createUserMessage, BlockAssembler }: LlmCallKit,
+  maxTokens: number,
   corpus: string,
   signal: AbortSignal,
 ): Promise<string> {
-  const { cfg } = deps;
-  if (!deps.createUserMessage || !deps.BlockAssembler) {
-    throw new Error('cleanup is unavailable');
-  }
-  const call = await llm.prepareCall({ ...route, maxTokens: cfg.cleanup.maxOutputTokens }, signal);
-  const message = deps.createUserMessage({
+  const call = await llm.prepareCall({ ...route, maxTokens }, signal);
+  const message = createUserMessage({
     content: [{ type: 'text', text: `Stored memories to analyze:\n\n${corpus}` }],
     source: {
       kind: 'plugin:shodh-memory',
@@ -606,7 +634,7 @@ async function askLlm(
     purpose: 'shodh-cleanup',
     signal,
   };
-  const assembler = new deps.BlockAssembler();
+  const assembler = new BlockAssembler();
   for await (const chunk of call.stream(options)) {
     throwIfCancelled(signal);
     assembler.push(chunk);
@@ -696,11 +724,6 @@ export function parseProposals(text: string): CleanupProposal[] {
 
 // ── rendering ────────────────────────────────────────────────────────────────
 
-/** The report header: a stable prefix, plus the tenant and the scan scope. */
-export function cleanupReportHeader(report: CleanupReport, scanned: number): string {
-  return `shodh cleanup  ${report.tenant}  ${scanned} memories scanned`;
-}
-
 /**
  * The human-facing report: numbered proposals grouped by operation, with the
  * scan scope spelled out so a partial scan is never mistaken for the store.
@@ -709,7 +732,10 @@ export function renderCleanupReport(
   report: CleanupReport,
   scope: { scanned: number; total: number; dropped: number },
 ): string {
-  const lines: string[] = [cleanupReportHeader(report, scope.scanned), '─'.repeat(44)];
+  const lines: string[] = [
+    `shodh cleanup  ${report.tenant}  ${scope.scanned} memories scanned`,
+    '─'.repeat(44),
+  ];
   if (scope.scanned < scope.total || scope.dropped > 0) {
     const parts: string[] = [];
     if (scope.scanned < scope.total) parts.push(`${scope.scanned}/${scope.total} newest scanned`);
@@ -755,23 +781,19 @@ export function renderCleanupReport(
 
 // ── small shared helpers ─────────────────────────────────────────────────────
 
-/** DELETE one memory through the breaker-aware `soft` path. @returns whether the server confirmed. */
-async function forgetQuiet(
-  client: ShodhClient,
-  id: string,
-  options: { userId: string; timeoutMs: number },
-): Promise<boolean> {
-  const result: JsonRecord | undefined = await client.soft(
-    `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(options.userId)}`,
-    undefined,
-    { method: 'DELETE', timeoutMs: options.timeoutMs },
-  );
-  return result !== undefined;
+/** Cleanup cannot run here (no LLM, no list endpoint, timeout): nothing changed. */
+function unavailable(message: string): CleanupResult {
+  return { kind: 'error', text: `Cleanup unavailable: ${message}` };
 }
 
-/** A uniform error line for every cleanup failure mode. */
-function errorText(message: string): string {
-  return `Cleanup unavailable: ${message}`;
+/** The request itself is wrong (no report, stale report, bad selection): nothing changed. */
+function refused(message: string): CleanupResult {
+  return { kind: 'error', text: `Cleanup apply refused: ${message}` };
+}
+
+/** A completed pass or apply, whatever its individual lines say. */
+function success(text: string): CleanupResult {
+  return { kind: 'success', text };
 }
 
 /** Best-effort human sentence for an unknown thrown value. */
@@ -782,11 +804,11 @@ function describeError(reason: unknown): string {
   return message.replace(/^shodh-memory:\s*/, '') + status;
 }
 
-/** Log a swallowed non-fatal list failure through the client's logger, if any. */
-function deps_debug(client: ShodhClient, error: unknown): void {
-  const err = error as { message?: unknown };
-  (client as { logger?: { debug?(...args: unknown[]): void } }).logger?.debug?.(
-    `[shodh-memory] cleanup list page failed, scanning what we have: ${String(err?.message ?? error)}`,
+/** Log a list page that failed after earlier pages succeeded; the scan keeps what it has. */
+function logPageFailure(client: ShodhClient, error: unknown): void {
+  const message = (error as { message?: unknown })?.message ?? error;
+  client.logger?.debug?.(
+    `[shodh-memory] cleanup list page failed, scanning what we have: ${String(message)}`,
   );
 }
 
