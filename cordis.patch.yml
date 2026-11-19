@@ -61,6 +61,21 @@
 # ── prompt section ───────────────────────────────────────────────────────────
 #   promptSection   add the short "how to use memory" system-prompt section.
 #                 ~140 tokens. Turning it off leaves the tools self-describing.
+#
+# ── on-demand cleanup ────────────────────────────────────────────────────────
+# `/shodh cleanup` reads the store through an LLM and PROPOSES merges and
+# deletions; nothing is written until `/shodh cleanup apply`. Costs nothing and
+# changes nothing until a human runs the command.
+#   maxMemories     newest memories the scan covers. The analysis reads them
+#                   newest-first and drops the oldest lines when the input
+#                   budget is tighter than the scan.
+#   maxFetches      cap on per-memory GETs used to replace truncated list
+#                   previews with full text (0 = analyze previews as-is).
+#   maxInputBytes   hard budget for the corpus sent to the model.
+#   maxOutputTokens   the model's output cap; proposals are short JSONL.
+#   timeoutMs       wall-clock budget for the whole pass, fetches included.
+#   provider/model  pin a route; unset uses the profile's first registered
+#                   provider and its first model.
 
 - insert:
     - id: shodh-memory
@@ -101,3 +116,12 @@
           minChars: 24
 
         promptSection: true
+
+        cleanup:
+          maxMemories: 200
+          maxFetches: 40
+          maxInputBytes: 120000
+          maxOutputTokens: 4000
+          timeoutMs: 45000
+          # provider: anthropic
+          # model: claude-sonnet-4-5

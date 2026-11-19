@@ -62,6 +62,39 @@ const MEMORIES = [
   },
 ];
 
+// The stored inventory for the cleanup pass. `m1`/`m2` are the near-duplicate
+// pair the canned LLM proposes to merge; `m1` reports itself truncated so the
+// GET-one fetch path runs against a real route.
+const CLEANUP_STORE = [
+  {
+    id: 'c1',
+    content: 'The deploy target is the staging host.'.repeat(30),
+    content_truncated: true,
+    content_length: 990,
+    memory_type: 'Decision',
+    importance: 0.9,
+    tags: ['deploy'],
+  },
+  {
+    id: 'c2',
+    content: 'Deploy goes to the staging host, per the release PR.',
+    content_truncated: false,
+    content_length: 53,
+    memory_type: 'Decision',
+    importance: 0.8,
+    tags: ['deploy'],
+  },
+  {
+    id: 'c3',
+    content: 'Superseded: the old deploy target was the dev box.',
+    content_truncated: false,
+    content_length: 50,
+    memory_type: 'Context',
+    importance: 0.3,
+    tags: [],
+  },
+];
+
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (chunk) => {
@@ -102,6 +135,29 @@ const server = http.createServer((req, res) => {
           context: [],
         }),
       );
+    }
+    // Cleanup inventory. One page under the cap, so a single call covers it.
+    if (req.url === '/api/memories' && req.method === 'POST') {
+      return res.end(
+        JSON.stringify({
+          memories: CLEANUP_STORE.map((m) =>
+            m.content_truncated ? { ...m, content: m.content.slice(0, 500) } : m,
+          ),
+          total: CLEANUP_STORE.length,
+        }),
+      );
+    }
+    if (/^\/api\/memory\/[\w-]+(\?.*)?$/.test(req.url ?? '')) {
+      if (req.method === 'GET') {
+        const id = (req.url as string).slice('/api/memory/'.length).split('?')[0];
+        const found = CLEANUP_STORE.find((m) => m.id === id);
+        if (!found) {
+          res.writeHead(404);
+          return res.end(JSON.stringify({ error: 'not found' }));
+        }
+        return res.end(JSON.stringify({ ...found, content: found.content, children_ids: [] }));
+      }
+      if (req.method === 'PUT') return res.end(JSON.stringify({ ok: true }));
     }
     if (req.method === 'DELETE') return res.end(JSON.stringify({ deleted: true }));
     res.writeHead(404);
@@ -166,6 +222,48 @@ class AgentsStub extends Service {
   }
 }
 
+// The canned analysis output: one JSONL merge (into the truncated c1) and one
+// JSONL delete, exactly in the shape the cleanup contract asks for.
+const CANNED_LLM_LINES = [
+  '{"op":"merge","ids":["c1","c2"],"into":"c1","text":"Deploys target the staging host, per the release PR.","reason":"two memories state the same deploy target"}',
+  'garbage that must be skipped',
+  '{"op":"delete","ids":["c3"],"reason":"superseded by the staging deploy decision"}',
+];
+let llmMode: 'answer' | 'empty' | 'error' = 'answer';
+const llmCalls: unknown[] = [];
+const llmRequests: unknown[] = [];
+
+/** Minimal LlmRuntime: one provider, frozen prepared config, canned chunk stream. */
+class LlmStub extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'llm');
+    Object.assign(this, {
+      listProviders: () => [{ id: 'stub', name: 'Stub' }],
+      listModels: async () => [{ id: 'cheap-model', name: 'Cheap' }],
+      prepareCall: async (config: Record<string, unknown>) => {
+        llmCalls.push(config);
+        const preparedConfig = Object.freeze({ ...config });
+        return {
+          config: preparedConfig,
+          async *stream(options: unknown) {
+            llmRequests.push(options);
+            if (llmMode === 'error') {
+              yield {
+                type: 'finish',
+                reason: { kind: 'error', failure: { message: 'provider exploded' } },
+              };
+              return;
+            }
+            const lines = llmMode === 'empty' ? [] : CANNED_LLM_LINES;
+            for (const text of lines) yield { type: 'text-delta', index: 0, text: `${text}\n` };
+            yield { type: 'finish', reason: { kind: 'stop' } };
+          },
+        };
+      },
+    });
+  }
+}
+
 // ── boot the plugin ──────────────────────────────────────────────────────────
 
 const logs: Array<[string, string]> = [];
@@ -184,6 +282,7 @@ new CommandsStub(ctx);
 new SystemPromptStub(ctx);
 new SessionsStub(ctx);
 new AgentsStub(ctx);
+new LlmStub(ctx);
 
 const mod = await import('../src/index.js');
 const entry = mod.default as unknown as Plugin.Object<Record<string, unknown>>;
@@ -469,18 +568,21 @@ check(
 check('memory_forget reports success', forgetResult.forgotten === true);
 
 console.log('\n[9] slash command');
-const command = registeredCommands.find((c) => c.name === 'shodh');
-assert.ok(command, '/shodh command registered');
-const statusOut = await command.handler({ rawInput: 'status', agent: { session: { id: 's' } } });
+const mainCommand = registeredCommands.find((c) => c.name === 'shodh');
+assert.ok(mainCommand, '/shodh command registered');
+const statusOut = await mainCommand.handler({
+  rawInput: 'status',
+  agent: { session: { id: 's' } },
+});
 check('/shodh status succeeds', statusOut.kind === 'success');
 check('status reports tenant', statusOut.text.includes('tenant    dsh'));
 check('status reports circuit', statusOut.text.includes('circuit   closed'));
 check('status reports version header', statusOut.text.startsWith('shodh-memory  v'));
 check('status reports effective recall config', statusOut.text.includes('recall    on'));
 check('status reports activity section', statusOut.text.includes('activity  '));
-const summaryOut = await command.handler({ rawInput: 'summary', agent: {} });
+const summaryOut = await mainCommand.handler({ rawInput: 'summary', agent: {} });
 check('/shodh summary lists decisions', summaryOut.text.includes('Decisions:'));
-const badOut = await command.handler({ rawInput: 'bogus', agent: {} });
+const badOut = await mainCommand.handler({ rawInput: 'bogus', agent: {} });
 check('unknown subcommand errors', badOut.kind === 'error');
 
 console.log('\n[10] resilience: circuit breaker');
@@ -568,8 +670,163 @@ check('default tenant used when no override', tenantA?.body?.user_id === 'dsh:de
 check('per-call override wins', tenantB?.body?.user_id === 'dsh:other-project');
 check('uid() falls back to the process default', scoped.uid(undefined) === 'dsh:default-project');
 
+console.log('\n[13] cleanup: propose, confirm, apply');
+// `cleanup` is a new command verb with a new report format; every string the
+// pass prints is a deliberate pin. Section [10] opened this fiber's breaker
+// with a five-second cooldown, and cleanup — correctly — honors it. Run the
+// whole phase against a fresh context: isolation, and no cooldown to race.
+const freshCtx = new Context();
+(freshCtx as unknown as { logger: unknown }).logger = {
+  info: () => {},
+  warn: () => {},
+  debug: () => {},
+  error: () => {},
+};
+new ToolsStub(freshCtx);
+const freshCommands: CommandDefinition[] = [];
+class CommandsCaptureStub extends Service {
+  register!: (def: CommandDefinition) => () => void;
+  constructor(ctx: Context) {
+    super(ctx, 'commands');
+    this.register = (def) => {
+      freshCommands.push(def);
+      return () => {};
+    };
+  }
+}
+new CommandsCaptureStub(freshCtx);
+new SystemPromptStub(freshCtx);
+new SessionsStub(freshCtx);
+new AgentsStub(freshCtx);
+new LlmStub(freshCtx);
+llmCalls.length = 0;
+llmRequests.length = 0;
+await freshCtx.plugin(entry, {
+  baseUrl,
+  apiKey: 'test-key-123',
+  requestTimeoutMs: 2000,
+  cleanup: { timeoutMs: 20000 },
+});
+const command = freshCommands.find((c) => c.name === 'shodh');
+assert.ok(command, '/shodh registered in the cleanup context');
+
+const cleanupOut = await command.handler({ rawInput: 'cleanup', agent: {} });
+check('/shodh cleanup succeeds', cleanupOut.kind === 'success');
+const listCall = received.find(
+  (r) => r.url === '/api/memories' && r.method === 'POST' && r.body?.user_id === 'dsh',
+);
+check('cleanup lists memories over the wire', Boolean(listCall));
+check(
+  'list call carries the page window',
+  listCall?.body?.limit === 100 && listCall?.body?.offset === 0,
+);
+check(
+  'report header names the tenant',
+  cleanupOut.text.startsWith('shodh cleanup  dsh  3 memories scanned'),
+);
+check('report numbers the merge proposal', cleanupOut.text.includes('1. merge 2 memories → c1'));
+check('report numbers the delete proposal', cleanupOut.text.includes('2. delete c3'));
+check(
+  'report carries the merged text',
+  cleanupOut.text.includes('Deploys target the staging host'),
+);
+check('report ends with the apply instruction', cleanupOut.text.includes('/shodh cleanup apply'));
+check('cleanup called the prepared llm route once', llmMode === 'answer' && llmCalls.length === 1);
+check(
+  'cleanup prepared the discovered route with its output cap',
+  (llmCalls[0] as Record<string, unknown>).provider === 'stub' &&
+    (llmCalls[0] as Record<string, unknown>).model === 'cheap-model' &&
+    (llmCalls[0] as Record<string, unknown>).maxTokens === 4000,
+);
+check(
+  'truncated list items were fetched in full',
+  received.some((r) => r.method === 'GET' && String(r.url).startsWith('/api/memory/c1?')),
+);
+// The full-text path is observable in the request the stub saw: c1's preview
+// marker is gone and its uncapped full text is in the corpus.
+const firstRequest = llmRequests[0] as {
+  messages: SmokeMessage[];
+  purpose?: string;
+  provider?: string;
+};
+const corpusText = firstRequest.messages[0]?.content[0]?.text ?? '';
+check(
+  'the analysis request carries the shodh-cleanup purpose',
+  firstRequest.purpose === 'shodh-cleanup',
+);
+check('the request used the prepared route', firstRequest.provider === 'stub');
+check(
+  'the corpus holds every scanned id',
+  ['c1', 'c2', 'c3'].every((id) => corpusText.includes(id)),
+);
+check('the truncated item lost its preview marker', !corpusText.includes('(truncated)'));
+check(
+  'the truncated item went in at full length',
+  corpusText.includes('The deploy target is the staging host.The deploy target'),
+);
+check(
+  'nothing was mutated by the proposal pass',
+  !received.some(
+    (r) => r.method === 'PUT' || (r.method === 'DELETE' && String(r.url).includes('c3')),
+  ),
+);
+
+const applyOut = await command.handler({ rawInput: 'cleanup apply 1', agent: {} });
+check('apply succeeds', applyOut.kind === 'success');
+check('apply reports the merge', applyOut.text.includes('#1 merged 2 → c1'));
+check('apply reports the forgotten copy', applyOut.text.includes('forgot c2'));
+check('apply did not run proposal 2', !applyOut.text.includes('#2'));
+check(
+  'only the selected proposal hit the wire',
+  !received.some((r) => r.method === 'DELETE' && String(r.url).includes('c3')),
+);
+const putCall = received.find((r) => r.method === 'PUT' && String(r.url) === '/api/memory/c1');
+check('merge rewrote the kept memory in place', Boolean(putCall));
+check(
+  'PUT body carries tenant and consolidated text',
+  putCall?.body?.user_id === 'dsh' &&
+    putCall?.body?.content === 'Deploys target the staging host, per the release PR.',
+);
+check(
+  'the merged-away copy was deleted',
+  received.some((r) => r.method === 'DELETE' && String(r.url).includes('/api/memory/c2')),
+);
+
+llmMode = 'empty';
+const emptyOut = await command.handler({ rawInput: 'cleanup', agent: {} });
+check('empty analysis still reports success', emptyOut.kind === 'success');
+check(
+  'empty analysis says nothing was proposed',
+  emptyOut.text.includes('No consolidation proposed'),
+);
+
+llmMode = 'error';
+const errorOut = await command.handler({ rawInput: 'cleanup', agent: {} });
+check('a failed model call errors cleanly', errorOut.kind === 'error');
+check(
+  'the error names the cause and the no-change promise',
+  errorOut.text.includes('provider exploded') && errorOut.text.includes('nothing was changed.'),
+);
+llmMode = 'answer';
+
+const usageOut = await command.handler({ rawInput: 'cleanup sideways', agent: {} });
+check(
+  'bad cleanup argument shows usage',
+  usageOut.kind === 'error' && usageOut.text.includes('Usage: /shodh cleanup'),
+);
+const applyWithoutReport = await command.handler({ rawInput: 'cleanup apply 404', agent: {} });
+check('apply with no matching number errors', applyWithoutReport.kind === 'error');
+const helpOut = await command.handler({ rawInput: 'help', agent: {} });
+check('help lists cleanup', helpOut.text.includes('/shodh cleanup'));
+const statusCleanup = await command.handler({ rawInput: 'status', agent: {} });
+check(
+  'status reports the cleanup line',
+  statusCleanup.text.includes('cleanup   auto · ≤200 memories'),
+);
+
 console.log(`\n${passed} checks passed.\n`);
 
+await freshCtx.fiber.dispose();
 await ctx.fiber.dispose();
 server.close();
 process.exit(0);

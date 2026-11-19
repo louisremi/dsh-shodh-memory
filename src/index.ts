@@ -15,7 +15,7 @@
  *   auto-recall   turn start → proactive_context → bounded block
  *   auto-capture  human prompts + failed tool calls → /api/remember
  *   tools         memory_save · memory_search · memory_forget
- *   command       /shodh status|save|search|summary|forget
+ *   command       /shodh status|save|search|summary|forget|cleanup
  *   prompt        one short section on how to use memory
  *
  * ── failure posture ──────────────────────────────────────────────────────────
@@ -37,6 +37,7 @@ import { installRecall } from './recall.js';
 import { registerTools } from './tools.js';
 import type {
   AgentRef,
+  BlockAssemblerCtor,
   CreateUserMessage,
   DefineTool,
   PluginState,
@@ -60,9 +61,11 @@ try {
 }
 
 let createUserMessage: CreateUserMessage | undefined;
+let BlockAssembler: BlockAssemblerCtor | undefined;
 try {
-  ({ createUserMessage } = (await import('@deepseek-ai/dsh-llm')) as unknown as {
+  ({ createUserMessage, BlockAssembler } = (await import('@deepseek-ai/dsh-llm')) as unknown as {
     createUserMessage?: CreateUserMessage;
+    BlockAssembler?: BlockAssemblerCtor;
   });
 } catch {
   /* auto-recall is skipped; tools and capture still work */
@@ -169,7 +172,15 @@ export function apply(ctx: ShodhContext, config: unknown): void {
   const stopCapture = installCapture(ctx, { client, cfg, state, resolveUserId });
   const stopRecall = installRecall(ctx, { client, cfg, state, createUserMessage, resolveUserId });
   const stopTools = registerTools(ctx, { client, cfg, defineTool, resolveUserId });
-  const stopCommand = registerCommand(ctx, { client, cfg, state, resolveUserId });
+  const stopCommand = registerCommand(ctx, {
+    client,
+    cfg,
+    state,
+    resolveUserId,
+    ctx,
+    createUserMessage,
+    BlockAssembler,
+  });
 
   // ctx.effect ties teardown to the fiber, so HMR reloads do not leave a second
   // copy of every listener registered against the same session stream.

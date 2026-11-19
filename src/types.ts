@@ -40,6 +40,15 @@ export interface AgentRef {
   workspace?: { cwd?: string };
 }
 
+/** Cancellation surface a command invocation may carry; absent means none. */
+export interface CommandSignal {
+  aborted?: boolean;
+  reason?: unknown;
+  addEventListener?: (type: string, listener: () => void) => unknown;
+  removeEventListener?: (type: string, listener: () => void) => unknown;
+  throwIfAborted?: () => void;
+}
+
 /** The session reference carried by session events. */
 export interface SessionRef {
   id?: string;
@@ -131,8 +140,55 @@ export interface ToolPresentCall {
 /** The `createUserMessage` export of `@deepseek-ai/dsh-llm`, as used here. */
 export type CreateUserMessage = (input: {
   content: { type: string; text: string }[];
-  source: { kind: string; form: string };
+  source: { kind: string; form: string; summary?: string };
 }) => unknown;
+
+/** A chunk of the raw adapter stream, as far as cleanup assembly reads it. */
+export interface StreamChunkLike {
+  type: string;
+  text?: string;
+  reason?: { kind?: string; failure?: { message?: string } };
+  [key: string]: unknown;
+}
+
+/** The subset of `LlmRuntime` the cleanup pass uses. */
+export interface LlmRuntimeLike {
+  listProviders(): { id: string; name?: string }[];
+  listModels(provider: string): Promise<{ id: string }[]>;
+  prepareCall(
+    config: JsonRecord,
+    signal?: AbortSignal,
+    configure?: (controls: JsonRecord, model: JsonRecord) => JsonRecord,
+  ): Promise<PreparedLlmCallLike>;
+}
+
+/** One prepared call: dispatch once, with the request's config fields matching `config`. */
+export interface PreparedLlmCallLike {
+  readonly config: JsonRecord;
+  /** The assembled request carries live objects (messages, signal), hence `unknown` values. */
+  stream(options: { [key: string]: unknown }): AsyncIterable<StreamChunkLike>;
+}
+
+/** The `BlockAssembler` constructor of `@deepseek-ai/dsh-llm`, as used here. */
+export interface BlockAssemblerCtor {
+  new (): {
+    push(chunk: StreamChunkLike): void;
+    readonly finish: { kind?: string; failure?: { message?: string } };
+  };
+}
+
+/** One memory as returned by the shodh list endpoints (`POST /api/memories`). */
+export interface ListMemoryItem {
+  id: string;
+  content: string;
+  /** True when `content` is a server-side preview cut short of the full text. */
+  truncated: boolean;
+  /** True character length of the full content, when the server reports it. */
+  length?: number;
+  type: string;
+  importance: number;
+  tags: string[];
+}
 
 /** The command definition shape accepted by `ctx.commands.register`. */
 export interface CommandDefinition {
@@ -146,6 +202,8 @@ export interface CommandDefinition {
 export interface CommandInvocation {
   rawInput?: string;
   agent?: AgentRef;
+  /** Cancellation, when the harness passes one; cleanup treats absence as "none". */
+  signal?: CommandSignal;
 }
 
 /** The result a command handler returns. */
@@ -167,6 +225,13 @@ export interface PromptSection {
  */
 export interface ShodhContext {
   logger?: ShodhLogger;
+  /**
+   * The harness LLM runtime, present when an llm service is in the profile.
+   * Soft capability: unlike `tools` it is deliberately NOT in `inject`, so a
+   * profile without an llm service still boots the plugin; only `/shodh
+   * cleanup` needs it and it degrades there with a clear message.
+   */
+  llm?: LlmRuntimeLike;
   tools: {
     register(definition: ToolDefinition): () => void;
   };
@@ -228,6 +293,15 @@ export interface ShodhConfig {
     maxChars: number;
     minChars: number;
   };
+  cleanup: {
+    maxMemories: number;
+    maxFetches: number;
+    maxInputBytes: number;
+    maxOutputTokens: number;
+    timeoutMs: number;
+    provider?: string;
+    model?: string;
+  };
   promptSection: boolean;
 }
 
@@ -249,6 +323,35 @@ export interface PluginState {
   /** Per-ledger map of memory key → turn last injected into it. */
   injectedTurns: Map<string, Map<string, number>>;
   activity: ActivityCounters;
+  /**
+   * The last `/shodh cleanup` report, held for `cleanup apply`. Nothing is
+   * applied without that second human command, and apply only accepts ids this
+   * report actually proposed.
+   */
+  cleanupProposals?: CleanupReport;
+}
+
+/** One LLM-proposed memory-store edit. Never executed without `/shodh cleanup apply`. */
+export interface CleanupProposal {
+  /** `merge` consolidate several memories; `delete` drop a stale one. */
+  op: 'merge' | 'delete';
+  /** Ids the proposal acts on. */
+  ids: string[];
+  /** For a merge: keep this id and rewrite it with `text` instead of re-adding. */
+  into?: string;
+  /** For a merge: the consolidated memory text. */
+  text?: string;
+  /** One-line justification, shown in the report. */
+  reason?: string;
+}
+
+/** One `/shodh cleanup` run, retained until the next run replaces it. */
+export interface CleanupReport {
+  tenant: string;
+  proposals: CleanupProposal[];
+  /** Ids of every memory the analysis actually saw; apply validates against this. */
+  knownIds: Set<string>;
+  created: number;
 }
 
 /** A memory rendered for display, normalized by format.ts. */

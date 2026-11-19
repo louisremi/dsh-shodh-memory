@@ -107,6 +107,33 @@ results to the block's budget makes the tool unable to answer the question it
 exists to answer, and an agent that cannot get an answer out of a tool goes and
 finds one somewhere worse.
 
+### On-demand cleanup
+
+A memory store rots: the same fact lands five times across sessions, decisions
+get superseded, half-truths outlive their context. shodh itself never prunes —
+that is a judgment call, and its engine deliberately makes no judgments.
+
+`/shodh cleanup` is where that call gets made, by a model, under your name:
+
+```
+/shodh cleanup           scans the store, prints numbered proposals
+/shodh cleanup apply 1,3 apply the ones you agree with (or `apply all`)
+```
+
+The pass reads your newest memories (through the list endpoint, with full-text
+fetches for anything the list truncated), asks an LLM for a strict JSONL
+analysis — merges of near-duplicates and deletions of stale entries, each with
+a one-line reason — and shows the proposals. **Nothing is written until you
+apply them.** A merge rewrites the kept memory in place (`PUT`, so shodh
+re-embeds it) and deletes the absorbed copies; the report tells you exactly
+which ids each step touches.
+
+The model never gets write access to your store. It gets a read-only index and
+returns suggestions; the apply step runs under your command with the numbers
+you chose. It is opt-on-demand: no scheduler, no standing cost, no background
+calls. If the profile has no LLM provider registered, cleanup says so and
+changes nothing.
+
 ### `/shodh` slash command
 
 Human-facing control that costs the model nothing:
@@ -117,6 +144,8 @@ Human-facing control that costs the model nothing:
 /shodh search <query>    Semantic search across all sessions   (alias: find)
 /shodh summary           Recent decisions, learnings, and context
 /shodh forget <id>       Delete one memory                     (alias: delete)
+/shodh cleanup           LLM pass proposing merges/deletions (nothing is applied)
+/shodh cleanup apply     Apply numbered proposals: apply 1,3 | apply all
 /shodh help              Usage
 ```
 
@@ -333,6 +362,10 @@ by targeting the row `id: shodh-memory` in `$DSH_HOME/cordis.patch.yml` or a
 | `tools.searchResultMaxChars` | `0` | Per-result cap on `memory_search` output. `0` = full text; only raise it to force a hard display budget |
 | `promptSection` | `true` | The ~150 tok usage-guidance section |
 | `failureCooldownMs` | `30000` | How long a dead server is ignored before a probe |
+| `cleanup.maxMemories` | `200` | Newest memories a `/shodh cleanup` scan covers |
+| `cleanup.maxInputBytes` | `120000` | Hard budget for the corpus sent to the model |
+| `cleanup.provider` / `.model` | first registered | Pin the analysis route; unset uses the profile's first provider and model |
+| `cleanup.timeoutMs` | `45000` | Wall-clock budget for the whole cleanup pass |
 
 ### Recommended: per-project memory
 

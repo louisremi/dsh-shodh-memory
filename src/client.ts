@@ -70,6 +70,14 @@ export interface ProactiveContextInput {
   maxResults?: number;
 }
 
+/** Parameters for {@link ShodhClient.listMemories}. */
+export interface ListMemoriesInput {
+  limit?: number;
+  offset?: number;
+  type?: string;
+  query?: string;
+}
+
 export class ShodhClient {
   baseUrl: string;
   apiKey: string;
@@ -359,6 +367,66 @@ export class ShodhClient {
         method: 'DELETE',
         ...options,
       },
+    );
+  }
+
+  /**
+   * Page through the stored memories, newest first.
+   *
+   * `total` in the response is the filter-matched count, so a caller pages by
+   * advancing `offset` by `limit` until it has `total` items. Item content is a
+   * server-side preview (500 chars); {@link getMemory} fetches the full text of
+   * any item that reports itself truncated.
+   *
+   * @param input - page window and optional filters.
+   * @param options - per-call overrides.
+   * @returns the list response (`{ memories, total }`).
+   */
+  listMemories({ limit = 100, offset = 0, type, query }: ListMemoriesInput, options?: CallOptions) {
+    return this.call(
+      '/api/memories',
+      {
+        user_id: this.uid(options),
+        limit,
+        offset,
+        ...(type ? { type } : {}),
+        ...(query ? { query } : {}),
+      },
+      options,
+    );
+  }
+
+  /**
+   * Fetch one memory with its full content.
+   * @param id - the memory id.
+   * @param options - per-call overrides.
+   * @returns the full record.
+   */
+  getMemory(id: string, options?: CallOptions) {
+    return this.call(
+      `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(this.uid(options))}`,
+      undefined,
+      { method: 'GET', ...options },
+    );
+  }
+
+  /**
+   * Rewrite one memory in place, keeping its id.
+   *
+   * `embeddings` is deliberately omitted: the server clears its stored
+   * embeddings and regenerates them from the new content, so the rewritten
+   * memory stays findable without the client computing anything.
+   *
+   * @param id - the memory id to rewrite.
+   * @param content - the replacement text.
+   * @param options - per-call overrides.
+   * @returns the update response.
+   */
+  updateMemory(id: string, content: string, options?: CallOptions) {
+    return this.call(
+      `/api/memory/${encodeURIComponent(id)}`,
+      { user_id: this.uid(options), content },
+      { method: 'PUT', ...options },
     );
   }
 

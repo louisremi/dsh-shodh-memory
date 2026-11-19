@@ -20,3 +20,6 @@ load-marker.json
 # Build output — generated from src/*.ts, never committed.
 dist/
 build/
+
+# Scratch space (harness TMPDIR) — never published.
+.tmp/

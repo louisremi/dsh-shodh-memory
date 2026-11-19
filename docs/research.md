@@ -673,3 +673,25 @@ export function apply(ctx, config) {
 - deepseekplugin.com is a third-party curated directory; its docs are mirrors of the official repo docs (each page cites the repo source path). The official docs site is https://deepseek-harness.github.io/deepseek-harness/.
 - The dsh docs are explicitly "Developer preview… there will be compatibility-breaking changes."
 - Real-world deviation from docs: only the docs use Schemastery `Config` exports; graph-memory, memory-evolve, and deja-vu all pass plain objects with manual defaults/validation through `apply(ctx, config)`.
+
+---
+
+## 7. Findings added for `/shodh cleanup` (verified against shodh 0.2.0 source and the local dsh install)
+
+**Shodh REST surface the cleanup pass relies on:**
+
+- `POST /api/memories` `{user_id, limit, offset, type?, query?}` → `{memories, total}`, newest-first. `MAX_LIST_LIMIT` is 10,000; content is previewed at 500 chars (`LIST_CONTENT_PREVIEW_CHARS`, `crud.rs:134`) with `content_truncated` / `content_length` flags. Older deployments may not route it at all — a 404/405 is treated as "endpoint missing", not as an outage.
+- `GET /api/memory/{id}?user_id=` → the flattened memory plus `children_ids`/`children_count`. Used to refill truncated previews.
+- `PUT /api/memory/{id}` `{user_id, content}` → rewrites content and **clears the embeddings so the server regenerates them** — the correct write for a merge. There is no PATCH route on this surface; PATCH returns 404 (verified from the router in `.tmp/router.rs`, kept from the source read).
+- `DELETE /api/memory/{id}?user_id=` → soft delete.
+- Never used: `/api/memories/bulk`, `/api/memories/clear` — blunt instruments the plugin must not own.
+
+**The one-shot LLM seam (`ctx.llm`):**
+
+- `listProviders(): {id, name}[]` and `listModels(provider): Promise<{id}[]>` discover a route; `cleanup.provider`/`.model` pin one explicitly.
+- `prepareCall({provider, model, maxTokens}, signal)` returns a `PreparedLlmCall` whose `config` is deep-frozen; `call.stream()` **must spread the prepared config** (`{...call.config, messages, system, …}`) or the harness rejects the mismatch. This mirrors upstream's `dsh-session-title-llm` (`executeSessionTitleLlm`).
+- Chunk assembly goes through `BlockAssembler` from `@deepseek-ai/dsh-llm`; acceptable finish kinds are `stop`, `tool-calls`, `max-tokens` (a cut-off JSONL tail line is simply skipped by the parser); `error`/`aborted` fail the pass with `finish.failure.message`.
+- `purpose: 'shodh-cleanup'` is passed but deliberately **not** registered in `LlmRequestPurposeMap`: registering it needs a static augmentation import of `@deepseek-ai/dsh-llm`, which the hard constraints forbid in `src/`. The harness does not validate purpose strings at runtime.
+
+**Message shape caveat:** `MessageSourceMap['user']` admits `{kind:'user'}` exactly — custom `kind`s on user messages are for service-side producers only. The cleanup notice injected through `createUserMessage` uses the `plugin:shodh-memory` / `form:'notice'` shape (with `summary`), following the recall precedent; the smoke suite pins the wire behavior around it.
+
