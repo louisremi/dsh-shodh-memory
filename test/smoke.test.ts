@@ -601,7 +601,7 @@ const summaryOut = await mainCommand.handler({ rawInput: 'summary', agent: {} })
 check('/shodh summary lists decisions', summaryOut.text.includes('Decisions:'));
 const badOut = await mainCommand.handler({ rawInput: 'bogus', agent: {} });
 check('unknown subcommand errors', badOut.kind === 'error');
-const helpOut = await command.handler({ rawInput: 'help', agent: {} });
+const helpOut = await mainCommand.handler({ rawInput: 'help', agent: {} });
 check('help lists the tui verb', helpOut.text.includes('/shodh tui '));
 check(
   'help lists tui install',
@@ -613,12 +613,12 @@ check(
   'help lists tui clean',
   helpOut.text.includes('/shodh tui clean [all]   Remove downloaded binaries it no longer runs'),
 );
-check('the input hint offers tui', Boolean(command.input?.hint?.includes('| tui]')));
+check('the input hint offers tui', Boolean(mainCommand.input?.hint?.includes('| tui]')));
 
 console.log('\n[9b] /shodh tui');
 // The plugin booted above with no terminal services, as a headless profile
 // does — and everything before this line worked. Only this verb says no.
-const tuiHeadless = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
+const tuiHeadless = await mainCommand.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
 check('without terminal services /shodh tui errors', tuiHeadless.kind === 'error');
 check('…and says where it works', tuiHeadless.text.includes('Web and Desktop'));
 
@@ -665,7 +665,7 @@ class SandboxPolicyStub extends Service {
 new TerminalControllerStub(ctx);
 new SandboxPolicyStub(ctx);
 
-const tuiOut = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
+const tuiOut = await mainCommand.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
 check('with terminal services /shodh tui succeeds', tuiOut.kind === 'success');
 check('one sidebar terminal requested', terminalRequests.length === 1);
 check('titled "Shodh memory"', terminalRequests[0]?.title === 'Shodh memory');
@@ -686,7 +686,7 @@ check(
   terminalWrites.length === 1 && terminalWrites[0] === ` exec '${process.execPath}' || exit 127\r`,
 );
 check('the result names the tenant to pick', tuiOut.text.includes('"dsh"'));
-const tuiAgain = await command.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
+const tuiAgain = await mainCommand.handler({ rawInput: 'tui', agent: { id: 'sess-tui' } });
 check('a second /shodh tui opens nothing new', terminalRequests.length === 1);
 check('…and says it is already open', tuiAgain.text.includes('already open'));
 
@@ -812,10 +812,10 @@ await freshCtx.plugin(entry, {
   requestTimeoutMs: 2000,
   cleanup: { timeoutMs: 20000 },
 });
-const command = freshCommands.find((c) => c.name === 'shodh');
-assert.ok(command, '/shodh registered in the cleanup context');
+const cleanupCommand = freshCommands.find((c) => c.name === 'shodh');
+assert.ok(cleanupCommand, '/shodh registered in the cleanup context');
 
-const cleanupOut = await command.handler({ rawInput: 'cleanup', agent: {} });
+const cleanupOut = await cleanupCommand.handler({ rawInput: 'cleanup', agent: {} });
 check('/shodh cleanup succeeds', cleanupOut.kind === 'success');
 const listCall = received.find(
   (r) => r.url === '/api/memories' && r.method === 'POST' && r.body?.user_id === 'dsh',
@@ -876,7 +876,7 @@ check(
   ),
 );
 
-const applyOut = await command.handler({ rawInput: 'cleanup apply 1', agent: {} });
+const applyOut = await cleanupCommand.handler({ rawInput: 'cleanup apply 1', agent: {} });
 check('apply succeeds', applyOut.kind === 'success');
 check('apply reports the merge', applyOut.text.includes('#1 merged 2 → c1'));
 check('apply reports the forgotten copy', applyOut.text.includes('forgot c2'));
@@ -898,7 +898,7 @@ check(
 );
 
 llmMode = 'empty';
-const emptyOut = await command.handler({ rawInput: 'cleanup', agent: {} });
+const emptyOut = await cleanupCommand.handler({ rawInput: 'cleanup', agent: {} });
 check('empty analysis still reports success', emptyOut.kind === 'success');
 check(
   'empty analysis says nothing was proposed',
@@ -906,7 +906,7 @@ check(
 );
 
 llmMode = 'error';
-const errorOut = await command.handler({ rawInput: 'cleanup', agent: {} });
+const errorOut = await cleanupCommand.handler({ rawInput: 'cleanup', agent: {} });
 check('a failed model call errors cleanly', errorOut.kind === 'error');
 check(
   'the error names the cause and the no-change promise',
@@ -914,16 +914,19 @@ check(
 );
 llmMode = 'answer';
 
-const usageOut = await command.handler({ rawInput: 'cleanup sideways', agent: {} });
+const usageOut = await cleanupCommand.handler({ rawInput: 'cleanup sideways', agent: {} });
 check(
   'bad cleanup argument shows usage',
   usageOut.kind === 'error' && usageOut.text.includes('Usage: /shodh cleanup'),
 );
-const applyWithoutReport = await command.handler({ rawInput: 'cleanup apply 404', agent: {} });
+const applyWithoutReport = await cleanupCommand.handler({
+  rawInput: 'cleanup apply 404',
+  agent: {},
+});
 check('apply with no matching number errors', applyWithoutReport.kind === 'error');
-const helpOut = await command.handler({ rawInput: 'help', agent: {} });
-check('help lists cleanup', helpOut.text.includes('/shodh cleanup'));
-const statusCleanup = await command.handler({ rawInput: 'status', agent: {} });
+const cleanupHelpOut = await cleanupCommand.handler({ rawInput: 'help', agent: {} });
+check('help lists cleanup', cleanupHelpOut.text.includes('/shodh cleanup'));
+const statusCleanup = await cleanupCommand.handler({ rawInput: 'status', agent: {} });
 check(
   'status reports the cleanup line',
   statusCleanup.text.includes('cleanup   auto · ≤200 memories'),
