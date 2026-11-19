@@ -38,15 +38,8 @@ export interface AgentRef {
   session?: { id?: string };
   workspaceCwd?: string;
   workspace?: { cwd?: string };
-}
-
-/** Cancellation surface a command invocation may carry; absent means none. */
-export interface CommandSignal {
-  aborted?: boolean;
-  reason?: unknown;
-  addEventListener?: (type: string, listener: () => void) => unknown;
-  removeEventListener?: (type: string, listener: () => void) => unknown;
-  throwIfAborted?: () => void;
+  /** The agent's own context; selects the session's execution providers. */
+  ctx?: { get?(name: string): unknown };
 }
 
 /** The session reference carried by session events. */
@@ -202,8 +195,8 @@ export interface CommandDefinition {
 export interface CommandInvocation {
   rawInput?: string;
   agent?: AgentRef;
-  /** Cancellation, when the harness passes one; cleanup treats absence as "none". */
-  signal?: CommandSignal;
+  /** Cancellation owned by the dispatching UI request. */
+  signal?: AbortSignal;
 }
 
 /** The result a command handler returns. */
@@ -257,6 +250,69 @@ export interface ShodhContext {
     ) => Promise<PreStepDecision>,
   ): () => void;
   effect(callback: () => () => void, name?: string): void;
+  /**
+   * Look up a service that may be absent. Used for the Web/Desktop-only
+   * terminal services, which must not be in `inject`: a headless profile has
+   * neither, and the rest of the plugin has to keep working there.
+   */
+  get?(name: string): unknown;
+}
+
+/** Process and input state of a sidebar terminal, as far as we read it. */
+export interface TerminalInfoLike {
+  state: string;
+  control?: string;
+  exitCode?: number | null;
+  error?: string;
+}
+
+/**
+ * The agent-side handle of one sidebar terminal — the members this plugin uses
+ * of `AgentTerminal` from `@deepseek-ai/dsh-api-terminal-controller`.
+ */
+export interface AgentTerminalLike {
+  readonly info: TerminalInfoLike;
+  /** Advances after applied output and published state changes. */
+  readonly revision: number;
+  changed(after: number, signal: AbortSignal): Promise<number>;
+  write(data: string): Promise<void>;
+  drain(): Promise<void>;
+  read(request: { offset: number; count: number; maxBytes: number }): { text: string };
+  close(): Promise<void>;
+}
+
+/** What `openForAgent` is asked for. */
+export interface AgentTerminalRequestLike {
+  title: string;
+  cwd?: string;
+  cols: number;
+  rows: number;
+  policy: unknown;
+  preferredShells: readonly string[];
+  env?: Record<string, string>;
+}
+
+/** `ctx.terminalController`, as used here. */
+export interface TerminalControllerLike {
+  openForAgent(
+    agent: unknown,
+    request: AgentTerminalRequestLike,
+    signal: AbortSignal,
+  ): Promise<AgentTerminalLike>;
+}
+
+/** `ctx.sandboxPolicy`, as used here. */
+export interface SandboxPolicyLike {
+  resolve(request: { session?: unknown }): unknown;
+}
+
+/** The session's `subprocess` provider, as used here. */
+export interface SubprocessLike {
+  resolveExecutable(
+    command: string,
+    env?: Readonly<Record<string, string>>,
+    signal?: AbortSignal,
+  ): Promise<string>;
 }
 
 /** Normalized plugin configuration (see config.ts for defaults). */
@@ -303,6 +359,13 @@ export interface ShodhConfig {
     model?: string;
   };
   promptSection: boolean;
+  tui: {
+    enabled: boolean;
+    path: string;
+    version: string;
+    cols: number;
+    rows: number;
+  };
 }
 
 /** Per-turn activity counters surfaced by `/shodh status`. */

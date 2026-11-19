@@ -15,7 +15,8 @@
  *   auto-recall   turn start → proactive_context → bounded block
  *   auto-capture  human prompts + failed tool calls → /api/remember
  *   tools         memory_save · memory_search · memory_forget
- *   command       /shodh status|save|search|summary|forget|cleanup
+ *   command       /shodh status|save|search|summary|forget|cleanup|tui
+ *   tui           upstream's dashboard in a right-sidebar terminal (Web/Desktop)
  *   prompt        one short section on how to use memory
  *
  * ── failure posture ──────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ import { registerCommand } from './commands.js';
 import { normalizeConfig } from './config.js';
 import { installRecall } from './recall.js';
 import { registerTools } from './tools.js';
+import { createTui } from './tui.js';
 import type {
   AgentRef,
   BlockAssemblerCtor,
@@ -79,6 +81,10 @@ export const name = 'shodh-memory';
  *
  * `sessions` and `agents` are listed for load ordering — the event listeners
  * below are useless if those subsystems come up after us.
+ *
+ * `terminalController` and `sandboxPolicy`, which `/shodh tui` uses, are left
+ * out on purpose: only the Web and Desktop apps have them, and listing them
+ * would keep the whole plugin from starting in a headless profile.
  */
 export const inject = ['tools', 'commands', 'systemPrompt', 'sessions', 'agents'];
 
@@ -172,6 +178,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
   const stopCapture = installCapture(ctx, { client, cfg, state, resolveUserId });
   const stopRecall = installRecall(ctx, { client, cfg, state, createUserMessage, resolveUserId });
   const stopTools = registerTools(ctx, { client, cfg, defineTool, resolveUserId });
+  const tui = createTui(ctx, { client, cfg, apiKey, resolveUserId });
   const stopCommand = registerCommand(ctx, {
     client,
     cfg,
@@ -180,6 +187,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
     ctx,
     createUserMessage,
     BlockAssembler,
+    tui,
   });
 
   // ctx.effect ties teardown to the fiber, so HMR reloads do not leave a second
@@ -190,6 +198,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
       stopRecall();
       stopTools();
       stopCommand();
+      tui.dispose();
       state.capturedHashes.clear();
       state.injectedTurns.clear();
     },

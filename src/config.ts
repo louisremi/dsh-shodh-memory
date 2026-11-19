@@ -135,6 +135,16 @@ export function normalizeConfig(raw: unknown): ShodhConfig {
     }),
 
     promptSection: bool(source.promptSection, true),
+
+    tui: section(source.tui, {
+      enabled: (v) => bool(v, true),
+      // Empty strings mean "not set": the managed install, then PATH, are tried.
+      path: (v) => (typeof v === 'string' ? v.trim() : ''),
+      version: (v) => (typeof v === 'string' ? v.trim() : ''),
+      // Initial grid only; the sidebar refits the terminal to its panel.
+      cols: (v) => Math.round(clamp(v, 40, 400, 120)),
+      rows: (v) => Math.round(clamp(v, 10, 150, 36)),
+    }),
   };
 }
 

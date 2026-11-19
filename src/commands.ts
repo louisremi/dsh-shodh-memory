@@ -12,6 +12,7 @@ import { applyCleanup, type CleanupDeps, runCleanup } from './cleanup.js';
 import type { ShodhClient } from './client.js';
 import { normalizeMemory } from './format.js';
 import type { TenantResolver } from './tools.js';
+import { TUI_HELP, type Tui } from './tui.js';
 import type {
   ActivityCounters,
   CommandInvocation,
@@ -40,6 +41,8 @@ export interface CommandDeps {
   createUserMessage?: CleanupDeps['createUserMessage'];
   /** The `BlockAssembler` class, when available (cleanup stream assembly). */
   BlockAssembler?: CleanupDeps['BlockAssembler'];
+  /** The `/shodh tui` verb. */
+  tui: Tui;
 }
 
 /**
@@ -49,12 +52,12 @@ export interface CommandDeps {
  * @returns a disposer unregistering the command.
  */
 export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => void {
-  const { client, cfg, state, resolveUserId } = deps;
+  const { client, cfg, state, resolveUserId, tui } = deps;
   return ctx.commands.register({
     name: 'shodh',
-    description: 'shodh-memory: status, save, search, summary, forget, cleanup',
+    description: 'shodh-memory: status, save, search, summary, forget, cleanup, tui',
     input: {
-      hint: '[status | save <text> | search <query> | summary | forget <id> | cleanup [apply <n,n>|all]]',
+      hint: '[status | save <text> | search <query> | summary | forget <id> | cleanup [apply <n,n>|all] | tui]',
     },
     async handler(invocation: CommandInvocation): Promise<CommandResult> {
       const input = (invocation.rawInput ?? '').trim();
@@ -77,6 +80,8 @@ export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => voi
           return forgetResult(client, argument, userId);
         case 'cleanup':
           return cleanupResult(deps, invocation, userId, second);
+        case 'tui':
+          return tui.run(invocation, argument);
         case 'help':
         case '--help':
           return { kind: 'success', text: HELP };
@@ -95,6 +100,7 @@ const HELP = [
   '/shodh forget <id>       Delete one memory',
   '/shodh cleanup           LLM pass proposing merges/deletions (nothing is applied)',
   '/shodh cleanup apply     Apply numbered proposals: apply 1,3 | apply all',
+  ...TUI_HELP,
 ].join('\n');
 
 /**

@@ -23,3 +23,7 @@ build/
 
 # Scratch space (harness TMPDIR) — never published.
 .tmp/
+
+# Agent skills installed locally (npx skills add …), not shared yet.
+.agents/
+skills-lock.json

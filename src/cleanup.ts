@@ -29,7 +29,6 @@ import type {
   BlockAssemblerCtor,
   CleanupProposal,
   CleanupReport,
-  CommandSignal,
   CreateUserMessage,
   JsonRecord,
   JsonValue,
@@ -103,7 +102,7 @@ const CLEANUP_TIMEOUT = new Error('shodh-memory: cleanup timed out');
 export async function runCleanup(
   deps: CleanupDeps,
   tenant: string,
-  signal?: CommandSignal,
+  signal?: AbortSignal,
 ): Promise<string> {
   const { ctx, client, cfg } = deps;
 
@@ -119,8 +118,8 @@ export async function runCleanup(
   const { items, scanned, total } = await collectMemories(client, cfg, tenant);
   if (items === null) {
     return errorText(
-      'the shodh server does not expose the memory list endpoint (`POST /api/memories`). ' +
-        'Upgrade shodh to a version with it.',
+      'the shodh server does not expose the memory list endpoint (`POST /api/memories`); ' +
+        'the circuit may also be open. Check `/shodh status`, then retry.',
     );
   }
   if (scanned === 0) {
@@ -173,7 +172,7 @@ export async function runCleanup(
 export async function applyCleanup(
   deps: CleanupDeps,
   spec: string,
-  signal?: CommandSignal,
+  signal?: AbortSignal,
 ): Promise<string> {
   const report = deps.state.cleanupProposals;
   if (!report || report.proposals.length === 0) {
@@ -609,19 +608,19 @@ function throwIfCancelled(signal: AbortSignal): void {
  * uses is not a runtime dep here).
  */
 function newDeadline(
-  caller: CommandSignal | undefined,
+  caller: AbortSignal | undefined,
   timeoutMs: number,
 ): { signal: AbortSignal; dispose(): void } {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(CLEANUP_TIMEOUT), timeoutMs);
   const onCallerAbort = () => controller.abort(caller?.reason ?? CLEANUP_TIMEOUT);
   if (caller?.aborted) onCallerAbort();
-  else caller?.addEventListener?.('abort', onCallerAbort);
+  else caller?.addEventListener('abort', onCallerAbort);
   return {
     signal: controller.signal,
     dispose() {
       clearTimeout(timer);
-      caller?.removeEventListener?.('abort', onCallerAbort);
+      caller?.removeEventListener('abort', onCallerAbort);
     },
   };
 }
