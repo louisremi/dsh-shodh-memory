@@ -133,8 +133,49 @@ export interface ToolPresentCall {
 /** The `createUserMessage` export of `@deepseek-ai/dsh-llm`, as used here. */
 export type CreateUserMessage = (input: {
   content: { type: string; text: string }[];
-  source: { kind: string; form: string };
+  source: { kind: string; form: string; summary?: string };
 }) => unknown;
+
+/** A chunk of the raw adapter stream, as far as cleanup assembly reads it. */
+export interface StreamChunkLike {
+  type: string;
+  text?: string;
+  reason?: { kind?: string; failure?: { message?: string } };
+  [key: string]: unknown;
+}
+
+/** The subset of `LlmRuntime` the cleanup pass uses. */
+export interface LlmRuntimeLike {
+  listProviders(): { id: string; name?: string }[];
+  listModels(provider: string): Promise<{ id: string }[]>;
+  prepareCall(config: JsonRecord, signal?: AbortSignal): Promise<PreparedLlmCallLike>;
+}
+
+/** One prepared call: dispatch once, with the request's config fields matching `config`. */
+export interface PreparedLlmCallLike {
+  readonly config: JsonRecord;
+  /** The assembled request carries live objects (messages, signal), hence `unknown` values. */
+  stream(options: { [key: string]: unknown }): AsyncIterable<StreamChunkLike>;
+}
+
+/** The `BlockAssembler` constructor of `@deepseek-ai/dsh-llm`, as used here. */
+export interface BlockAssemblerCtor {
+  new (): {
+    push(chunk: StreamChunkLike): void;
+    readonly finish: { kind?: string; failure?: { message?: string } };
+  };
+}
+
+/** One memory as returned by the shodh list endpoints (`POST /api/memories`). */
+export interface ListMemoryItem {
+  id: string;
+  content: string;
+  /** True when `content` is a server-side preview cut short of the full text. */
+  truncated: boolean;
+  type: string;
+  importance: number;
+  tags: string[];
+}
 
 /** The command definition shape accepted by `ctx.commands.register`. */
 export interface CommandDefinition {
@@ -197,9 +238,11 @@ export interface ShodhContext {
   ): () => void;
   effect(callback: () => () => void, name?: string): void;
   /**
-   * Look up a service that may be absent. Used for the Web/Desktop-only
-   * terminal services, which must not be in `inject`: a headless profile has
-   * neither, and the rest of the plugin has to keep working there.
+   * Look up a service that may be absent. Used for the services that must not
+   * be in `inject`, because the rest of the plugin has to keep working without
+   * them: the Web/Desktop-only terminal services, and `llm` (as
+   * {@link LlmRuntimeLike}), which only `/shodh cleanup` needs. Never read
+   * these as `ctx.<name>`: cordis throws for an un-injected property.
    */
   get?(name: string): unknown;
 }
@@ -295,6 +338,15 @@ export interface ShodhConfig {
     maxChars: number;
     minChars: number;
   };
+  cleanup: {
+    maxMemories: number;
+    maxFetches: number;
+    maxInputBytes: number;
+    maxOutputTokens: number;
+    timeoutMs: number;
+    provider?: string;
+    model?: string;
+  };
   promptSection: boolean;
   tui: {
     enabled: boolean;
@@ -323,6 +375,48 @@ export interface PluginState {
   /** Per-ledger map of memory key → turn last injected into it. */
   injectedTurns: Map<string, Map<string, number>>;
   activity: ActivityCounters;
+  /**
+   * The last `/shodh cleanup` report per tenant, held for `cleanup apply`.
+   * Keyed by tenant so one workspace can never apply another's proposals.
+   * Nothing is applied without that second human command.
+   */
+  cleanupReports: Map<string, CleanupReport>;
+}
+
+/** One LLM-proposed memory-store edit. Never executed without `/shodh cleanup apply`. */
+export interface CleanupProposal {
+  /** `merge` consolidate several memories; `delete` drop a stale one. */
+  op: 'merge' | 'delete';
+  /** Ids the proposal acts on. */
+  ids: string[];
+  /** For a merge: keep this id and rewrite it with `text` instead of re-adding. */
+  into?: string;
+  /** For a merge: the consolidated memory text. */
+  text?: string;
+  /** One-line justification, shown in the report. */
+  reason?: string;
+}
+
+/**
+ * One `/shodh cleanup` run, held until it is applied, expires, or the next run
+ * replaces it. Every field is checked again at apply time.
+ */
+export interface CleanupReport {
+  /** The tenant analyzed. Apply refuses to run under any other tenant. */
+  tenant: string;
+  proposals: CleanupProposal[];
+  /** Ids that made it into the analysis input (possibly cut). A delete needs these. */
+  seenIds: Set<string>;
+  /**
+   * Ids whose whole text was in the analysis input. A merge rewrites or deletes
+   * every id it names, so all of them must be here — otherwise text the model
+   * never saw would be lost.
+   */
+  fullIds: Set<string>;
+  /** Epoch ms; apply refuses a report past the cleanup report TTL. */
+  created: number;
+  /** Proposal indexes already executed; re-applying them is a no-op. */
+  applied: Set<number>;
 }
 
 /** A memory rendered for display, normalized by format.ts. */
@@ -349,4 +443,9 @@ export interface CallOptions {
   timeoutMs?: number;
   /** Tenant override; wins over the client's default user id. */
   userId?: string;
+  /**
+   * Caller cancellation. Aborting it cancels the request; it is the caller's
+   * decision, not a server failure, so it never counts against the breaker.
+   */
+  signal?: AbortSignal;
 }

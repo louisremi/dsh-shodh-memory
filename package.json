@@ -1,6 +1,6 @@
 {
   "name": "@louisremi/dsh-shodh-memory",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Native shodh-memory integration for DeepSeek Harness — persistent cognitive memory without an MCP server in the context window.",
   "keywords": [
     "dsh",
@@ -36,7 +36,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "test": "pnpm run build && tsc -p tsconfig.test.json && node build/test/format.test.js && node build/test/tui-install.test.js && node build/test/tui.test.js && node build/test/client.test.js && node build/test/dsh-contract.test.js && node build/test/smoke.test.js"
+    "test": "pnpm run build && tsc -p tsconfig.test.json && node build/test/format.test.js && node build/test/cleanup.test.js && node build/test/tui-install.test.js && node build/test/tui.test.js && node build/test/client.test.js && node build/test/dsh-contract.test.js && node build/test/smoke.test.js"
   },
   "files": [
     "dist",

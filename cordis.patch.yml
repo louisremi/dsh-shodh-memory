@@ -62,6 +62,24 @@
 #   promptSection   add the short "how to use memory" system-prompt section.
 #                 ~140 tokens. Turning it off leaves the tools self-describing.
 #
+# ── on-demand cleanup ────────────────────────────────────────────────────────
+# `/shodh cleanup` reads the store through an LLM and PROPOSES merges and
+# deletions; nothing is written until `/shodh cleanup apply`. Costs nothing and
+# changes nothing until a human runs the command.
+#   maxMemories     newest memories the scan covers. The analysis reads them
+#                   newest-first and drops the oldest lines when the input
+#                   budget is tighter than the scan.
+#   maxFetches      cap on per-memory GETs used to replace truncated list
+#                   previews with full text, newest first. 0 = analyze the
+#                   previews as-is; a memory left truncated can still be
+#                   proposed for deletion but never merged.
+#   maxInputBytes   hard budget for the corpus sent to the model.
+#   maxOutputTokens   the model's output cap; proposals are short JSONL.
+#   timeoutMs       wall-clock budget for the whole pass (list, fetches, model),
+#                   and separately for each `apply`.
+#   provider/model  pin a route; unset uses the profile's first registered
+#                   provider and its first model.
+#
 # ── TUI ──────────────────────────────────────────────────────────────────────
 # `/shodh tui` runs upstream's `shodh-tui` binary in a right-sidebar terminal.
 # Web and Desktop only; adds no tool and no prompt text, so it costs no tokens.
@@ -111,6 +129,15 @@
           minChars: 24
 
         promptSection: true
+
+        cleanup:
+          maxMemories: 200
+          maxFetches: 40
+          maxInputBytes: 120000
+          maxOutputTokens: 4000
+          timeoutMs: 45000
+          # provider: anthropic
+          # model: claude-sonnet-4-5
 
         tui:
           enabled: true

@@ -673,3 +673,35 @@ export function apply(ctx, config) {
 - deepseekplugin.com is a third-party curated directory; its docs are mirrors of the official repo docs (each page cites the repo source path). The official docs site is https://deepseek-harness.github.io/deepseek-harness/.
 - The dsh docs are explicitly "Developer preview… there will be compatibility-breaking changes."
 - Real-world deviation from docs: only the docs use Schemastery `Config` exports; graph-memory, memory-evolve, and deja-vu all pass plain objects with manual defaults/validation through `apply(ctx, config)`.
+
+---
+
+## 7. Findings added for `/shodh cleanup` (verified against shodh 0.2.0 source and the local dsh install)
+
+**Shodh REST surface the cleanup pass relies on:**
+
+- `POST /api/memories` `{user_id, limit, offset}` → `{memories, total}`, newest-first. (The server also accepts `type`, `query` and `origin` filters; the plugin sends none, since cleanup scans everything.) `MAX_LIST_LIMIT` is 10,000; content is previewed at 500 chars (`LIST_CONTENT_PREVIEW_CHARS`, `crud.rs:134`) with `content_truncated` / `content_length` flags. Older deployments may not route it at all — a 404/405 is treated as "endpoint missing", not as an outage.
+- `GET /api/memory/{id}?user_id=` → the flattened memory plus `children_ids`/`children_count`. Used to refill truncated previews.
+- `PUT /api/memory/{id}` `{user_id, content}` → rewrites content and **clears the embeddings so the server regenerates them** — the correct write for a merge. There is no PATCH route on this surface; PATCH returns 404 (verified from the router in `.tmp/router.rs`, kept from the source read).
+- `DELETE /api/memory/{id}?user_id=` → soft delete.
+- Never used: `/api/memories/bulk`, `/api/memories/clear` — blunt instruments the plugin must not own.
+
+**The one-shot LLM seam (the `llm` service):**
+
+- `llm` is deliberately not in the plugin's `inject` list: a profile without an LLM must still boot the plugin. In cordis, reading an un-injected service as a property (`ctx.llm`) **throws** `cannot get property "llm" without inject`; `ctx.get('llm')` returns `undefined` instead. Cleanup therefore looks it up with `ctx.get('llm')` at call time. The first implementation read `ctx.llm` and would have crashed `/shodh cleanup` on any profile without an LLM service; the no-LLM smoke check caught it.
+
+- `listProviders(): {id, name}[]` and `listModels(provider): Promise<{id}[]>` discover a route; `cleanup.provider`/`.model` pin one explicitly.
+- `prepareCall({provider, model, maxTokens}, signal)` returns a `PreparedLlmCall` whose `config` is deep-frozen; `call.stream()` **must spread the prepared config** (`{...call.config, messages, system, …}`) or the harness rejects the mismatch. This mirrors upstream's `dsh-session-title-llm` (`executeSessionTitleLlm`).
+- Chunk assembly goes through `BlockAssembler` from `@deepseek-ai/dsh-llm`; acceptable finish kinds are `stop`, `tool-calls`, `max-tokens` (a cut-off JSONL tail line is simply skipped by the parser); `error`/`aborted` fail the pass with `finish.failure.message`.
+- `purpose: 'shodh-cleanup'` is passed but deliberately **not** registered in `LlmRequestPurposeMap`: registering it needs a static augmentation import of `@deepseek-ai/dsh-llm`, which the hard constraints forbid in `src/`. The harness does not validate purpose strings at runtime.
+
+**Message source on the analysis request:** `MessageSourceMap` (dsh-llm 0.2.0-rc.2, `lib/types/message.d.ts`) is merge-extensible: its `user` entry is `{kind:'user'}`, but the map's own doc says "user messages carry any producer's kind, and consumers fall through unknown kinds" and that each producer declares its own `kind` ("there is no shared catch-all `plugin` kind"). `createUserMessage` does no validation; it adds an id and freezes. `form:'notice'` is a declared `ContextForm` and requires a one-line `summary` (≤ 120 chars, `CONTEXT_SUMMARY_MAX_CHARS`). So the cleanup request's single user message is `{kind:'plugin:shodh-memory', form:'notice', summary:'shodh memory cleanup analysis'}`, matching recall's `{kind:'plugin:shodh-memory', form:'recall'}`. The kind isn't registered through module augmentation, because that needs a static import of `@deepseek-ai/dsh-llm`, which `src/` must not have; it is typed structurally in `src/types.ts`. The one-shot request isn't written to any session log. Smoke section [13] pins this source.
+
+
+**Reinforcement and forgetting (shodh `902daf8`, read from source):**
+
+- Each memory carries `importance` (0–1), `access_count`, `last_accessed`, and `activation` (`MemoryMetadata`, `src/memory/types.rs`). A recall bumps `access_count`; past 5 accesses each further recall multiplies `importance` by 1.1. Feedback adds +0.05 (helpful) or −10% (misleading, floor 0.05); background maintenance boosts frequently accessed memories.
+- `POST /api/memories` returns `importance` but not `access_count`; `GET /api/memory/{id}` returns both.
+- Nothing deletes memories automatically. Automatic decay applies to activation, graph edges (pruned when weak), and extracted facts. Removing memories by importance is an explicit call (`POST /api/forget/importance`), and even that only flags them as forgotten. "Forgetting" a memory means it ranks lower: recall scores are multiplied by `0.7 + 0.3 × importance`.
+- At write time, a new memory ≥0.95 cosine to an existing one is dropped to ~1% importance; similar older memories lose some importance. Paraphrases below 0.95 are not caught; that's the gap `/shodh cleanup` fills.
+- `PUT /api/memory/{id}` replaces only the content and embeddings: the id, `importance`, and `access_count` survive. Hence a merge keeps the most reinforced memory and rewrites it.

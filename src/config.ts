@@ -23,6 +23,11 @@ const LIMITS = {
   requestTimeoutMs: 30000,
   recallTimeoutMs: 10000,
   captureTimeoutMs: 30000,
+  cleanupMaxMemories: 2000,
+  cleanupMaxFetches: 500,
+  cleanupMaxInputBytes: 400_000,
+  cleanupMaxOutputTokens: 16_000,
+  cleanupTimeoutMs: 120_000,
 };
 
 /** @returns `value` when it is a finite number, else `fallback`. */
@@ -110,6 +115,23 @@ export function normalizeConfig(raw: unknown): ShodhConfig {
       assistantReplies: (v) => bool(v, false),
       maxChars: (v) => clamp(v, 64, LIMITS.captureMaxChars, 900),
       minChars: (v) => clamp(v, 0, 4000, 24),
+    }),
+
+    cleanup: section(source.cleanup, {
+      // The analysis reads the newest memories first; beyond this many the
+      // report says how many were skipped rather than silently under-scanning.
+      maxMemories: (v) => clamp(v, 10, LIMITS.cleanupMaxMemories, 200),
+      // Full-text fetches for list previews that came back truncated.
+      maxFetches: (v) => clamp(v, 0, LIMITS.cleanupMaxFetches, 40),
+      maxInputBytes: (v) => clamp(v, 1000, LIMITS.cleanupMaxInputBytes, 120_000),
+      maxOutputTokens: (v) => clamp(v, 256, LIMITS.cleanupMaxOutputTokens, 4000),
+      // The whole LLM pass: preparation + stream. A human waits on this one,
+      // so it gets a far larger budget than the turn-critical paths.
+      timeoutMs: (v) => clamp(v, 1000, LIMITS.cleanupTimeoutMs, 45_000),
+      // Route pinning: set both to choose the model explicitly; leave both
+      // unset and cleanup uses the first registered provider's first model.
+      provider: (v) => (typeof v === 'string' && v.length > 0 ? v : undefined),
+      model: (v) => (typeof v === 'string' && v.length > 0 ? v : undefined),
     }),
 
     promptSection: bool(source.promptSection, true),

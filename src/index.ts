@@ -15,7 +15,7 @@
  *   auto-recall   turn start → proactive_context → bounded block
  *   auto-capture  human prompts + failed tool calls → /api/remember
  *   tools         memory_save · memory_search · memory_forget
- *   command       /shodh status|save|search|summary|forget|tui
+ *   command       /shodh status|save|search|summary|forget|cleanup|tui
  *   tui           upstream's dashboard in a right-sidebar terminal (Web/Desktop)
  *   prompt        one short section on how to use memory
  *
@@ -39,6 +39,7 @@ import { registerTools } from './tools.js';
 import { createTui } from './tui.js';
 import type {
   AgentRef,
+  BlockAssemblerCtor,
   CreateUserMessage,
   DefineTool,
   PluginState,
@@ -62,9 +63,11 @@ try {
 }
 
 let createUserMessage: CreateUserMessage | undefined;
+let BlockAssembler: BlockAssemblerCtor | undefined;
 try {
-  ({ createUserMessage } = (await import('@deepseek-ai/dsh-llm')) as unknown as {
+  ({ createUserMessage, BlockAssembler } = (await import('@deepseek-ai/dsh-llm')) as unknown as {
     createUserMessage?: CreateUserMessage;
+    BlockAssembler?: BlockAssemblerCtor;
   });
 } catch {
   /* auto-recall is skipped; tools and capture still work */
@@ -155,6 +158,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
   const state: PluginState = {
     capturedHashes: new Set<string>(),
     injectedTurns: new Map<string, Map<string, number>>(),
+    cleanupReports: new Map(),
     // Session activity counters, surfaced by `/shodh status`. These are
     // process-lifetime tallies (reset on reload), not persisted history — they
     // answer "what has this running plugin actually done", which is what makes
@@ -176,7 +180,16 @@ export function apply(ctx: ShodhContext, config: unknown): void {
   const stopRecall = installRecall(ctx, { client, cfg, state, createUserMessage, resolveUserId });
   const stopTools = registerTools(ctx, { client, cfg, defineTool, resolveUserId });
   const tui = createTui(ctx, { client, cfg, apiKey, resolveUserId });
-  const stopCommand = registerCommand(ctx, { client, cfg, state, resolveUserId, tui });
+  const stopCommand = registerCommand(ctx, {
+    client,
+    cfg,
+    state,
+    resolveUserId,
+    ctx,
+    createUserMessage,
+    BlockAssembler,
+    tui,
+  });
 
   // ctx.effect ties teardown to the fiber, so HMR reloads do not leave a second
   // copy of every listener registered against the same session stream.

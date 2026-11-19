@@ -8,6 +8,7 @@
  * @module commands
  */
 
+import { applyCleanup, type CleanupDeps, runCleanup } from './cleanup.js';
 import type { ShodhClient } from './client.js';
 import { normalizeMemory } from './format.js';
 import type { TenantResolver } from './tools.js';
@@ -34,6 +35,12 @@ export interface CommandDeps {
   state: PluginState;
   /** Tenant resolver. */
   resolveUserId: TenantResolver;
+  /** The cordis context; the cleanup pass looks up the optional `llm` service on it. */
+  ctx: ShodhContext;
+  /** The `createUserMessage` factory, when available (cleanup input message). */
+  createUserMessage?: CleanupDeps['createUserMessage'];
+  /** The `BlockAssembler` class, when available (cleanup stream assembly). */
+  BlockAssembler?: CleanupDeps['BlockAssembler'];
   /** The `/shodh tui` verb. */
   tui: Tui;
 }
@@ -48,11 +55,13 @@ export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => voi
   const { client, cfg, state, resolveUserId, tui } = deps;
   return ctx.commands.register({
     name: 'shodh',
-    description: 'shodh-memory: status, save, search, summary, forget, tui',
-    input: { hint: '[status | save <text> | search <query> | summary | forget <id> | tui]' },
+    description: 'shodh-memory: status, save, search, summary, forget, cleanup, tui',
+    input: {
+      hint: '[status | save <text> | search <query> | summary | forget <id> | cleanup [apply <n,n>|all] | tui]',
+    },
     async handler(invocation: CommandInvocation): Promise<CommandResult> {
       const input = (invocation.rawInput ?? '').trim();
-      const [verb = 'status'] = input.split(/\s+/);
+      const [verb = 'status', second = ''] = input.split(/\s+/);
       const argument = input.slice(verb.length).trim();
       const userId = resolveUserId(invocation.agent);
 
@@ -69,6 +78,8 @@ export function registerCommand(ctx: ShodhContext, deps: CommandDeps): () => voi
         case 'forget':
         case 'delete':
           return forgetResult(client, argument, userId);
+        case 'cleanup':
+          return cleanupResult(deps, invocation, userId, second);
         case 'tui':
           return tui.run(invocation, argument);
         case 'help':
@@ -87,6 +98,8 @@ const HELP = [
   '/shodh search <query>    Semantic search across all sessions',
   '/shodh summary           Recent decisions, learnings, and context',
   '/shodh forget <id>       Delete one memory',
+  '/shodh cleanup           LLM pass proposing merges/deletions (nothing is applied)',
+  '/shodh cleanup apply     Apply numbered proposals: apply 1,3 | apply all',
   ...TUI_HELP,
 ].join('\n');
 
@@ -180,6 +193,13 @@ async function statusResult(
     .filter(Boolean)
     .join(' · ');
   lines.push(`tools     ${toolList || 'none'}`);
+  const route =
+    cfg.cleanup.provider !== undefined && cfg.cleanup.model !== undefined
+      ? `${cfg.cleanup.provider}/${cfg.cleanup.model}`
+      : 'auto';
+  lines.push(
+    `cleanup   ${route} · ≤${cfg.cleanup.maxMemories} memories · on demand (/shodh cleanup)`,
+  );
 
   // ── this process ─────────────────────────────────────────────────────────
   const a: Partial<ActivityCounters> = state.activity ?? {};
@@ -303,6 +323,49 @@ async function summaryResult(client: ShodhClient): Promise<CommandResult> {
     for (const item of items) lines.push(`  - ${item.content}`);
   }
   return { kind: 'success', text: lines.length ? lines.join('\n') : 'No memories yet.' };
+}
+
+/**
+ * `/shodh cleanup [apply …]` — the only token-spending path in the plugin,
+ * and it never runs without a human typing it. Bare form proposes; `apply`
+ * executes selected proposals from the last report.
+ * @param deps - command dependencies (they carry the cleanup wiring).
+ * @param invocation - the raw invocation, for optional cancellation.
+ * @param userId - the resolved tenant.
+ * @param second - the token after `cleanup`, `apply` or empty.
+ * @returns the command result.
+ */
+async function cleanupResult(
+  deps: CommandDeps,
+  invocation: CommandInvocation,
+  userId: string,
+  second: string,
+): Promise<CommandResult> {
+  const cleanupDeps: CleanupDeps = {
+    ctx: deps.ctx,
+    client: deps.client,
+    cfg: deps.cfg,
+    state: deps.state,
+    createUserMessage: deps.createUserMessage,
+    BlockAssembler: deps.BlockAssembler,
+  };
+  const kind = second.toLowerCase() === 'apply' ? 'apply' : second === '' ? 'run' : 'usage';
+  if (kind === 'usage') {
+    return {
+      kind: 'error',
+      text: 'Usage: /shodh cleanup  — or —  /shodh cleanup apply <n,n> | all',
+    };
+  }
+  return kind === 'run'
+    ? runCleanup(cleanupDeps, userId, invocation.signal)
+    : applyCleanup(cleanupDeps, userId, inputAfterApply(invocation), invocation.signal);
+}
+
+/** The argument after `apply`: proposal numbers or `all`. */
+function inputAfterApply(invocation: CommandInvocation): string {
+  const input = (invocation.rawInput ?? '').trim();
+  const match = /^cleanup\s+apply\s+(.*)$/i.exec(input);
+  return (match?.[1] ?? '').trim();
 }
 
 /**

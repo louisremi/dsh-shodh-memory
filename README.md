@@ -113,6 +113,53 @@ results to the block's budget makes the tool unable to answer the question it
 exists to answer, and an agent that cannot get an answer out of a tool goes and
 finds one somewhere worse.
 
+### On-demand cleanup
+
+A memory store rots: the same fact lands five times across sessions, decisions
+get superseded, half-truths outlive their context. shodh itself never prunes —
+that is a judgment call, and its engine deliberately makes no judgments.
+
+`/shodh cleanup` is where that call gets made, by a model, under your name:
+
+```
+/shodh cleanup           scans the store, prints numbered proposals
+/shodh cleanup apply 1,3 apply the ones you agree with (or `apply all`)
+```
+
+The pass reads your newest memories (through the list endpoint, with full-text
+fetches for anything the list truncated), asks an LLM for a strict JSONL
+analysis — merges of near-duplicates and deletions of stale entries, each with
+a one-line reason — and shows the proposals. **Nothing is written until you
+apply them.** A merge rewrites the kept memory in place (`PUT`, so shodh
+re-embeds it) and deletes the absorbed copies; the report tells you exactly
+which ids each step touches.
+
+The model never gets write access to your store. It gets a read-only index and
+returns suggestions; the apply step runs under your command with the numbers
+you chose. It is opt-on-demand: no scheduler, no standing cost, no background
+calls. If the profile has no LLM provider registered, cleanup says so and
+changes nothing.
+
+Apply only trusts what the analysis actually showed the model:
+
+- **The most reinforced memory survives a merge.** shodh raises a memory's
+  `importance` each time it is recalled or marked helpful. A merge rewrites
+  one memory and deletes the others along with everything shodh learned about
+  them, so the plugin — not the model — picks the survivor: highest
+  `importance`, then highest access count. The report marks it `(kept: most
+  reinforced)`.
+- **No merge over unseen text.** A merge rewrites one memory and deletes the
+  others, so every memory it names must have reached the model whole. A
+  memory still truncated, or cut at the 1,200-char line cap, can be proposed
+  for deletion but never merged.
+- **Your tenant, your report.** Reports are kept per tenant; another
+  workspace cannot apply yours. A report expires after 30 minutes, and a
+  proposal already applied is skipped if you apply again.
+- **Strict numbers.** `apply 1,x` is refused outright rather than quietly
+  applying `1`.
+- **One budget.** `timeoutMs` bounds the whole pass — listing, full-text
+  fetches, and the model — and, separately, each apply.
+
 ### `/shodh` slash command
 
 Human-facing control that costs the model nothing:
@@ -123,6 +170,8 @@ Human-facing control that costs the model nothing:
 /shodh search <query>    Semantic search across all sessions   (alias: find)
 /shodh summary           Recent decisions, learnings, and context
 /shodh forget <id>       Delete one memory                     (alias: delete)
+/shodh cleanup           LLM pass proposing merges/deletions (nothing is applied)
+/shodh cleanup apply     Apply numbered proposals: apply 1,3 | apply all
 /shodh tui               Open the shodh dashboard in the right panel
 /shodh tui install       Download the shodh-tui binary (or a [version] of it)
 /shodh tui clean [all]   Remove downloaded binaries it no longer runs
@@ -396,6 +445,12 @@ by targeting the row `id: shodh-memory` in `$DSH_HOME/cordis.patch.yml` or a
 | `tui.version` | `''` | Release tag to install and prefer (`v0.2.0`). Empty = the server's version |
 | `tui.cols`, `tui.rows` | `120`, `36` | Initial grid; the sidebar refits it to the panel |
 | `failureCooldownMs` | `30000` | How long a dead server is ignored before a probe |
+| `cleanup.maxMemories` | `200` | Newest memories a `/shodh cleanup` scan covers |
+| `cleanup.maxFetches` | `40` | Full-text reads for list previews shodh cut at 500 chars. A memory left as a preview can be deleted but never merged |
+| `cleanup.maxInputBytes` | `120000` | Hard budget for the corpus sent to the model |
+| `cleanup.maxOutputTokens` | `4000` | Output cap for the analysis; a reply cut short loses only its unfinished last proposal |
+| `cleanup.provider` / `.model` | first registered | Pin the analysis route; unset uses the profile's first provider and model |
+| `cleanup.timeoutMs` | `45000` | Wall-clock budget for the whole pass (list, fetches, model), and separately for each `apply` |
 
 ### Recommended: per-project memory
 

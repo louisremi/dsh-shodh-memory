@@ -70,6 +70,12 @@ export interface ProactiveContextInput {
   maxResults?: number;
 }
 
+/** Parameters for {@link ShodhClient.listMemories}. */
+export interface ListMemoriesInput {
+  limit?: number;
+  offset?: number;
+}
+
 export class ShodhClient {
   baseUrl: string;
   apiKey: string;
@@ -140,8 +146,9 @@ export class ShodhClient {
   async call<T = JsonRecord>(
     path: string,
     body?: JsonRecord,
-    { method = 'POST', timeoutMs }: CallOptions = {},
+    { method = 'POST', timeoutMs, signal }: CallOptions = {},
   ): Promise<T> {
+    signal?.throwIfAborted();
     if (this.breakerOpen) {
       throw new ShodhError(
         `shodh-memory circuit open (retry in ${Math.ceil((this.openUntil - Date.now()) / 1000)}s)`,
@@ -152,6 +159,8 @@ export class ShodhClient {
     const budget = timeoutMs ?? this.requestTimeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
+    const onCallerAbort = () => controller.abort();
+    signal?.addEventListener('abort', onCallerAbort, { once: true });
 
     try {
       const headers: Record<string, string> = { Accept: 'application/json' };
@@ -190,6 +199,9 @@ export class ShodhClient {
         );
       }
     } catch (error) {
+      // The caller gave up: not evidence about the server, so the breaker
+      // must not hear about it. Surface the caller's own reason.
+      if (signal?.aborted) throw signal.reason;
       if (error instanceof ShodhError) {
         this.recordFailure(error);
         throw error;
@@ -202,6 +214,7 @@ export class ShodhClient {
       throw wrapped;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onCallerAbort);
     }
   }
 
@@ -223,6 +236,8 @@ export class ShodhClient {
     try {
       return await this.call<T>(path, body, options);
     } catch (error) {
+      // Cancellation is the caller's own decision, never an "uninteresting failure".
+      if (options?.signal?.aborted) throw error;
       const err = error as { message?: unknown };
       this.logger?.debug?.(`[shodh-memory] ${String(err?.message ?? error)}`);
       return undefined;
@@ -359,6 +374,56 @@ export class ShodhClient {
         method: 'DELETE',
         ...options,
       },
+    );
+  }
+
+  /**
+   * Page through the stored memories, newest first.
+   *
+   * `total` in the response is the tenant's memory count, so a caller pages by
+   * advancing `offset` by `limit` until it has `total` items. Item content is a
+   * server-side preview (500 chars); {@link getMemory} fetches the full text of
+   * any item that reports itself truncated.
+   *
+   * @param input - the page window.
+   * @param options - per-call overrides.
+   * @returns the list response (`{ memories, total }`).
+   */
+  listMemories({ limit = 100, offset = 0 }: ListMemoriesInput, options?: CallOptions) {
+    return this.call('/api/memories', { user_id: this.uid(options), limit, offset }, options);
+  }
+
+  /**
+   * Fetch one memory with its full content.
+   * @param id - the memory id.
+   * @param options - per-call overrides.
+   * @returns the full record.
+   */
+  getMemory(id: string, options?: CallOptions) {
+    return this.call(
+      `/api/memory/${encodeURIComponent(id)}?user_id=${encodeURIComponent(this.uid(options))}`,
+      undefined,
+      { method: 'GET', ...options },
+    );
+  }
+
+  /**
+   * Rewrite one memory in place, keeping its id.
+   *
+   * `embeddings` is deliberately omitted: the server clears its stored
+   * embeddings and regenerates them from the new content, so the rewritten
+   * memory stays findable without the client computing anything.
+   *
+   * @param id - the memory id to rewrite.
+   * @param content - the replacement text.
+   * @param options - per-call overrides.
+   * @returns the update response.
+   */
+  updateMemory(id: string, content: string, options?: CallOptions) {
+    return this.call(
+      `/api/memory/${encodeURIComponent(id)}`,
+      { user_id: this.uid(options), content },
+      { method: 'PUT', ...options },
     );
   }
 
