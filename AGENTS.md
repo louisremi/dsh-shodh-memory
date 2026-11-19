@@ -57,6 +57,12 @@ pnpm test        # build + typecheck + format suite + smoke suite
 - **Secrets never get committed.** npm publication goes through Trusted
   Publishing (OIDC, `id-token: write`) — this repo holds **no npm token at
   all**, in secrets or anywhere else. Do not add an `NPM_TOKEN`.
+- **One publishing workflow, named `publish.yml`.** npm Trusted Publishing
+  authorizes a workflow *filename*, and this package is registered for
+  `.github/workflows/publish.yml`. Tag pushes, human-published releases, and
+  the dispatch recovery lever all live in that one file; don't rename it or
+  add a second workflow that mints an npm OIDC token (npm answers the PUT
+  with a 404).
 - **Node >= 24.9 is the supported runtime** (`engines`), because that is what
   DSH itself requires; the plugin never runs on an older Node. Keep `engines`
   in step with DSH's own `engines` and CI on that Node line. Keep build
