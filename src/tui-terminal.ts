@@ -11,7 +11,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { errorMessage, linkedSignal } from './tui-install.js';
+import { basename } from 'node:path';
 import type {
   AgentRef,
   AgentTerminalLike,
@@ -19,6 +19,7 @@ import type {
   ShodhContext,
   TerminalControllerLike,
 } from './types.js';
+import { errorMessage, linkedSignal } from './util.js';
 
 /** The two Web/Desktop services a sidebar terminal needs; they always travel together. */
 export interface TerminalServices {
@@ -118,17 +119,19 @@ export async function launchInTerminal(
     await terminal.write(`${launchLine(request.binary)}\r`);
     await watchLaunch(terminal, timings.launchWatchMs, signal);
   } catch (error) {
-    await terminal.close().catch(() => {});
-    return { error: `Could not start the shodh TUI: ${errorMessage(error)}` };
+    await closeQuietly(terminal);
+    return { error: `Could not start ${basename(request.binary)}: ${errorMessage(error)}` };
   }
 
   if (terminal.info.state !== 'running') {
     // Started and died at once: a loader error (wrong glibc, wrong CPU) is the
     // usual cause, and its message is the last thing on the screen.
     const screen = await lastLines(terminal, 6);
-    await terminal.close().catch(() => {});
+    await closeQuietly(terminal);
     const detail = screen || terminal.info.error || `exit code ${terminal.info.exitCode ?? '?'}`;
-    return { error: `shodh-tui exited as soon as it started (${request.binary}):\n${detail}` };
+    return {
+      error: `${basename(request.binary)} exited as soon as it started (${request.binary}):\n${detail}`,
+    };
   }
   return { terminal };
 }
@@ -147,6 +150,15 @@ export function isLive(terminal: AgentTerminalLike): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Close a terminal, ignoring a refusal: `close` rejects once the person has
+ * typed into it, and then it is theirs to keep.
+ * @param terminal - a terminal from {@link launchInTerminal}.
+ */
+export async function closeQuietly(terminal: AgentTerminalLike): Promise<void> {
+  await terminal.close().catch(() => {});
 }
 
 /**

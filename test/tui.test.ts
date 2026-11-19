@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ShodhClient } from '../src/client.js';
 import { normalizeConfig } from '../src/config.js';
-import { createTui, MISSING_BINARY, TUI_TITLE } from '../src/tui.js';
+import { createTui, MISSING_BINARY, TUI_HELP, TUI_TITLE } from '../src/tui.js';
 import { launchLine, shellQuote } from '../src/tui-terminal.js';
 import type {
   AgentRef,
@@ -441,6 +441,10 @@ console.log('\n[6] refusals');
 
   const usage = await tui(host()).run({ agent: agent('s', [BIN]) }, 'bogus');
   check('an unknown sub-verb shows usage', usage.kind === 'error' && usage.text.includes('Usage'));
+  check(
+    '…in the words of /shodh help',
+    TUI_HELP.every((line) => usage.text.includes(line)),
+  );
 }
 
 console.log('\n[7] a binary that cannot start');
@@ -517,6 +521,16 @@ console.log('\n[9] teardown');
   await sleep(5);
   check('a terminal the plugin controls is closed', mine.closed);
   check('a terminal the person took over is left open', !theirs.closed);
+}
+{
+  const h = host();
+  const t = tui(h);
+  const pending = t.run({ agent: agent('late', [BIN]) }, '');
+  await sleep(10); // the terminal is open, the launch watch still running
+  t.dispose();
+  const late = await pending;
+  check('a launch that ends after teardown is an error', late.kind === 'error');
+  check('…and closes its terminal', (h.opened[0] as Opened).terminal.closed);
 }
 
 console.log('\n[10] /shodh tui install');

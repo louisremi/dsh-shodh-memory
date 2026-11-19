@@ -628,6 +628,7 @@ src/
   tui.ts            /shodh tui — binary lookup, install verb, one TUI per session
   tui-terminal.ts   start one program in a DSH sidebar terminal, confirm it runs
   tui-install.ts    /shodh tui install — verified download of shodh-tui
+  util.ts           small shared helpers (linked abort signal, error message)
 client/
   index.js          the right panel's "Shodh memory" card (browser, no build)
 test/

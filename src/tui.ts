@@ -27,7 +27,6 @@ import { delimiter, isAbsolute, join } from 'node:path';
 import type { ShodhClient } from './client.js';
 import type { TenantResolver } from './tools.js';
 import {
-  errorMessage,
   installedPath,
   installTui,
   listInstalled,
@@ -38,6 +37,7 @@ import {
   tuiRoot,
 } from './tui-install.js';
 import {
+  closeQuietly,
   DEFAULT_TIMINGS,
   isLive,
   launchInTerminal,
@@ -54,6 +54,7 @@ import type {
   ShodhContext,
   SubprocessLike,
 } from './types.js';
+import { errorMessage } from './util.js';
 
 /** Tab title of the terminal, and how the command result refers to it. */
 export const TUI_TITLE = 'Shodh memory';
@@ -63,6 +64,12 @@ export const TUI_TITLE = 'Shodh memory';
  * start-page card (client/index.js) matches it to offer its Install button.
  */
 export const MISSING_BINARY = `No ${TUI_BINARY} binary found.`;
+
+/** The verb's lines in `/shodh help`, also its usage message. */
+export const TUI_HELP = [
+  '/shodh tui               Open the shodh dashboard in the right panel',
+  '/shodh tui install       Download the shodh-tui binary (or a [version] of it)',
+];
 
 /** Dependencies for {@link createTui}. */
 export interface TuiDeps {
@@ -112,11 +119,15 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
   const terminals = new Map<string, AgentTerminalLike>();
   /** Opens in flight, so two quick invocations share one terminal. */
   const opening = new Map<string, Promise<CommandResult>>();
+  /** Set by `dispose`; a launch that finishes afterwards closes its terminal. */
+  let disposed = false;
 
-  /** @returns the DSH home the host booted from, when it says. */
-  function hostHome(): string | undefined {
+  /** @returns {@link tuiRoot} under the DSH home the host booted from, when it says. */
+  function managedRoot(): string {
     const profile = ctx.get?.('profileContext') as { home?: unknown } | undefined;
-    return typeof profile?.home === 'string' && profile.home.length > 0 ? profile.home : undefined;
+    const home =
+      typeof profile?.home === 'string' && profile.home.length > 0 ? profile.home : undefined;
+    return tuiRoot(home);
   }
 
   /**
@@ -146,7 +157,7 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
     if (existing) {
       terminals.delete(key);
       // An ended terminal the person never typed into still holds a tab.
-      await existing.close().catch(() => {});
+      await closeQuietly(existing);
     }
 
     const pending = opening.get(key);
@@ -171,7 +182,7 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
     services: TerminalServices,
   ): Promise<CommandResult> {
     const signal = invocation.signal ?? new AbortController().signal;
-    const root = tuiRoot(hostHome());
+    const root = managedRoot();
 
     const binary = await resolveBinary(agent, root, signal);
     if ('error' in binary) return { kind: 'error', text: binary.error };
@@ -196,6 +207,11 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
       signal,
     );
     if ('error' in outcome) return { kind: 'error', text: outcome.error };
+    if (disposed) {
+      // The plugin was unloaded mid-launch: nothing would ever close this one.
+      await closeQuietly(outcome.terminal);
+      return { kind: 'error', text: 'The shodh plugin was unloaded. Run /shodh tui again.' };
+    }
 
     terminals.set(sessionKey(agent), outcome.terminal);
     return {
@@ -309,7 +325,7 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
       }
     }
 
-    const root = tuiRoot(hostHome());
+    const root = managedRoot();
     if ((await listInstalled(root)).includes(tag)) {
       return {
         kind: 'success',
@@ -356,14 +372,14 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
       if (verb.toLowerCase() === 'install') return install(invocation, rest);
       return Promise.resolve({
         kind: 'error',
-        text: 'Usage: /shodh tui            open the dashboard in the right panel\n       /shodh tui install [version]',
+        text: ['Usage:', ...TUI_HELP].join('\n'),
       });
     },
     dispose() {
+      disposed = true;
       for (const terminal of terminals.values()) {
-        // `close` refuses once the person has typed into the terminal; it is
-        // theirs then, and stays open.
-        if (terminal.info.control === 'agent') void terminal.close().catch(() => {});
+        // A terminal the person has typed into is theirs, and stays open.
+        if (terminal.info.control === 'agent') void closeQuietly(terminal);
       }
       terminals.clear();
     },

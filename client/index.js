@@ -130,17 +130,27 @@
         const [busy, setBusy] = React.useState(undefined);
         /** The last command reply, `{ ok, text }`, until the next click. */
         const [outcome, setOutcome] = React.useState(undefined);
+        /** False once the card is gone; an install can outlive it by minutes. */
+        const mounted = React.useRef(true);
+        React.useEffect(
+          () => () => {
+            mounted.current = false;
+          },
+          [],
+        );
         const start = (install) => {
           if (busy || !execute) return;
           setBusy(install ? 'installing' : 'starting');
           setOutcome(undefined);
           void openTui(execute, install).then((next) => {
+            if (!mounted.current) return;
             setBusy(undefined);
             setOutcome(next);
           });
         };
         const reply = !busy && outcome?.text ? outcome : undefined;
-        const sub = busy ? en[busy] : (reply?.text ?? description);
+        const busyText = busy === 'installing' ? en.installing : en.starting;
+        const sub = busy ? busyText : (reply?.text ?? description);
         const subClass = !reply
           ? 'shodh-tui-sub'
           : reply.ok
@@ -238,7 +248,7 @@
           );
         },
         // Exposed for the test suite only.
-        __test: { openTui, isMissingBinary, TYPE_ID, KIND, OPEN, INSTALL, en },
+        __test: { openTui, isMissingBinary, TYPE_ID, KIND, OPEN, INSTALL, MISSING_BINARY, en },
       };
     },
   });

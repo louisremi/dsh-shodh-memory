@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { MISSING_BINARY as HOST_MISSING_BINARY } from '../src/tui.js';
 
 let passed = 0;
 function check(label: string, condition: unknown): void {
@@ -80,7 +81,7 @@ mod.apply({
     },
   },
 });
-const { openTui, isMissingBinary, TYPE_ID, OPEN, INSTALL } = mod.__test;
+const { openTui, isMissingBinary, MISSING_BINARY, TYPE_ID, OPEN, INSTALL } = mod.__test;
 
 const type = types[0] as Anything;
 check('one tab type with one guide card', types.length === 1 && type.guide.length === 1);
@@ -106,7 +107,11 @@ const result = (kind: string, text?: string) => ({ ok: true, value: { result: { 
 const same = (actual: Anything, ok: boolean, text: string) =>
   actual?.ok === ok && actual?.text === text;
 const opened = 'Opened "Shodh memory" in the right panel.\nPick the profile "dsh-x" there.';
-const missing = { ok: false, text: 'No shodh-tui binary found.\nRun `/shodh tui install` …' };
+check(
+  "the card matches the Host's no-binary line, word for word",
+  MISSING_BINARY === HOST_MISSING_BINARY,
+);
+const missing = { ok: false, text: `${HOST_MISSING_BINARY}\nRun \`/shodh tui install\` …` };
 
 check(
   'success → its reply, shown on the card',

@@ -11,7 +11,7 @@
 import type { ShodhClient } from './client.js';
 import { normalizeMemory } from './format.js';
 import type { TenantResolver } from './tools.js';
-import type { Tui } from './tui.js';
+import { TUI_HELP, type Tui } from './tui.js';
 import type {
   ActivityCounters,
   CommandInvocation,
@@ -87,8 +87,7 @@ const HELP = [
   '/shodh search <query>    Semantic search across all sessions',
   '/shodh summary           Recent decisions, learnings, and context',
   '/shodh forget <id>       Delete one memory',
-  '/shodh tui               Open the shodh dashboard in the right panel',
-  '/shodh tui install       Download the shodh-tui binary (or a [version] of it)',
+  ...TUI_HELP,
 ].join('\n');
 
 /**
