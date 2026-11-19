@@ -57,8 +57,10 @@ pnpm test        # build + typecheck + format suite + smoke suite
 - **Secrets never get committed.** npm publication goes through Trusted
   Publishing (OIDC, `id-token: write`) — this repo holds **no npm token at
   all**, in secrets or anywhere else. Do not add an `NPM_TOKEN`.
-- **Node >= 18 is a supported runtime** (`engines`). Keep build targets at
-  ES2022.
+- **Node >= 24.9 is the supported runtime** (`engines`), because that is what
+  DSH itself requires; the plugin never runs on an older Node. Keep `engines`
+  in step with DSH's own `engines` and CI on that Node line. Keep build
+  targets at ES2022.
 
 ## Dependency updates
 

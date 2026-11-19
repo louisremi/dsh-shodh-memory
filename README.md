@@ -130,7 +130,7 @@ Bare `/shodh` runs `status`.
 |---|---|
 | **DeepSeek Harness** | `dsh` 0.1.6-alpha.1 (developed against; earlier 0.1.x should work) |
 | **shodh-memory** | Any build exposing the HTTP API — binary, Docker, or `shodh server` |
-| **Node.js** | ≥ 18 (uses the global `fetch`) |
+| **Node.js** | ≥ 24.9, the version DSH itself requires |
 | **pnpm** | Required only for `dsh plugin add` |
 
 The plugin has **no runtime dependencies**. It uses Node's built-in `fetch` and
