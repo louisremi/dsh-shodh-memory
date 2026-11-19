@@ -634,8 +634,8 @@ client/
 test/
   format.test.ts       24-check unit test for the two rendering budgets
   tui-install.test.ts  39-check test of the download, digest check, and unpack
-  tui.test.ts          84-check test of /shodh tui against a fake terminal
-  client.test.ts       27-check test of the card's commands, replies, and Install offer
+  tui.test.ts          87-check test of /shodh tui against a fake terminal
+  client.test.ts       28-check test of the card's commands, replies, and Install offer
   smoke.test.ts        66-check end-to-end test against a fake shodh
   overlay.yml          dev overlay for booting inside a real harness
 deploy/               live-server verification scripts (dev-only, not published)
