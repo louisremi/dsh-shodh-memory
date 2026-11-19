@@ -1,6 +1,7 @@
-// Boot the real plugin inside a real cordis Context, pointed at the live shodh
-// container on nasbrico, and report which tools/commands/prompt sections it
-// registers. Uses the same Service-stub pattern as test/smoke.test.ts.
+// Boot the real plugin inside a real cordis Context, pointed at a live
+// shodh-memory server (`SHODH_BASE`), and report which tools, commands and
+// prompt sections it registers. Uses the same Service-stub pattern as
+// test/smoke.test.ts.
 import { Context, Service } from '@deepseek-ai/cordis';
 import * as plugin from '/workspace/shodh-memory-dsh-integration/dist/index.js';
 
