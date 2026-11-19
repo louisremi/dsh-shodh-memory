@@ -20,3 +20,7 @@ load-marker.json
 # Build output — generated from src/*.ts, never committed.
 dist/
 build/
+
+# Agent skills installed locally (npx skills add …), not shared yet.
+.agents/
+skills-lock.json
