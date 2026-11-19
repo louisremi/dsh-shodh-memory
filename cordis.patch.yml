@@ -61,6 +61,16 @@
 # ── prompt section ───────────────────────────────────────────────────────────
 #   promptSection   add the short "how to use memory" system-prompt section.
 #                 ~140 tokens. Turning it off leaves the tools self-describing.
+#
+# ── TUI ──────────────────────────────────────────────────────────────────────
+# `/shodh tui` runs upstream's `shodh-tui` binary in a right-sidebar terminal.
+# Web and Desktop only; adds no tool and no prompt text, so it costs no tokens.
+#   enabled         false makes `/shodh tui` report that it is switched off.
+#   path            absolute path to a `shodh-tui` binary. Empty: the copy
+#                 `/shodh tui install` downloaded, then `shodh-tui` on PATH.
+#   version         release tag to install and prefer (e.g. v0.2.0). Empty:
+#                 the version the server reports on /health.
+#   cols, rows      initial grid; the sidebar refits it to the panel.
 
 - insert:
     - id: shodh-memory
@@ -101,3 +111,10 @@
           minChars: 24
 
         promptSection: true
+
+        tui:
+          enabled: true
+          path: ''
+          version: ''
+          cols: 120
+          rows: 36
