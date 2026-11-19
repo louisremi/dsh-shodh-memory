@@ -666,12 +666,14 @@ git tag v0.3.0 && git push origin v0.3.0
 
 CI then creates the GitHub release with notes generated from the commits
 since the previous tag, and publishes it to npm with provenance attestation
-through npm Trusted Publishing (OIDC) — no `NPM_TOKEN` secret; the npm side
-needs `@louisremi/dsh-shodh-memory` registered with this repo's `release.yml`
-and `publish.yml` as trusted publishers. The publish job refuses a tag that
-does not match `package.json` and skips a version already on the registry, so
-re-running it is safe. Never publish from a laptop. If publication fails after
-the release is out, fix the cause and replay it with
+through npm Trusted Publishing (OIDC) — no `NPM_TOKEN` secret. The whole
+pipeline is one workflow, `.github/workflows/publish.yml`: npm Trusted
+Publishing authorizes a workflow *filename*, and
+`@louisremi/dsh-shodh-memory` is registered for `publish.yml`, so renaming
+that file breaks publishing. The publish job refuses a tag that does not match
+`package.json` and skips a version already on the registry, so re-running it is
+safe. Never publish from a laptop. If publication fails after the release is
+out, fix the cause and replay it with
 `gh workflow run publish.yml -f tag=v0.3.0`.
 
 ---
