@@ -189,7 +189,7 @@ it on `PATH`.
 |---|---|
 | **DeepSeek Harness** | `dsh` 0.1.6-alpha.1 (developed against; earlier 0.1.x should work). `/shodh tui` needs the Web or Desktop app. It and the start-page card were run on 0.2.2-rc.2; the test suite checks the card's DSH interfaces against the pinned DSH packages, 0.2.2-rc.5 today (see [Testing status](#testing-status--please-read)) |
 | **shodh-memory** | Any build exposing the HTTP API — binary, Docker, or `shodh server` |
-| **Node.js** | ≥ 18 (uses the global `fetch`) |
+| **Node.js** | ≥ 24.9, the version DSH itself requires |
 | **pnpm** | Required only for `dsh plugin add` |
 
 The plugin has **no runtime dependencies**. It uses Node's built-in `fetch` and
