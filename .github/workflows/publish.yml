@@ -1,22 +1,32 @@
-name: Publish
+name: Release
 
-# npm publication for releases NOT cut through release.yml. A human editing
-# a release in the UI fires `release: published` and lands here; releases
-# created by CI publish inside release.yml itself (GitHub does not fire
-# `release` events for releases created with GITHUB_TOKEN).
+# ONE publishing workflow, deliberately. npm Trusted Publishing binds an OIDC
+# identity to a workflow *filename*: `@louisremi/dsh-shodh-memory` is
+# registered on npmjs.com for `publish.yml`, so a publish job in another file
+# gets npm's generic 404 on PUT. Keep every path that publishes in this file,
+# and keep the filename — renaming it silently breaks releases.
 #
-# workflow_dispatch is the recovery lever: after fixing whatever failed,
-# publish any released tag with
-#   gh workflow run publish.yml -f tag=v0.3.0
-# Re-running is safe: the guards below reject a tag/version mismatch and
-# skip a version the registry already carries.
+# Cut a release by pushing a `v*` tag:
+#   git tag v0.3.0 && git push origin v0.3.0
+# That run creates the GitHub release with notes generated from the commits
+# since the previous tag, then publishes to npm with provenance.
 #
-# npm publication uses Trusted Publishing (OIDC): id-token: write below, and
-# `@louisremi/dsh-shodh-memory` registered on npmjs.com with this repo and
-# workflow file as a trusted publisher. There is no NPM_TOKEN secret — do
-# not add one.
+# Two other triggers share the file:
+#  - `release: published` publishes a release a human cut by hand. Releases
+#    created by this workflow use GITHUB_TOKEN, and GitHub's recursion guard
+#    means they do not fire `release` events again.
+#  - `workflow_dispatch` is the recovery lever: after fixing whatever failed,
+#    replay a tag with
+#      gh workflow run publish.yml -f tag=v0.3.0
+#    It only publishes; it never creates a release.
+#
+# Publication uses Trusted Publishing (OIDC), so there is no NPM_TOKEN secret
+# — do not add one.
 
 on:
+  push:
+    tags:
+      - 'v*'
   release:
     types: [published]
   workflow_dispatch:
@@ -28,15 +38,50 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+env:
+  # The tag this run is about: the pushed tag, the published release's tag, or
+  # the dispatch input.
+  TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
-  publish:
+  release:
+    # Only tag pushes create a release; the other triggers publish one that
+    # already exists.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Create GitHub release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Retrying a tag run must not fail because the release already exists.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; keeping its notes."
+          else
+            gh release create "$TAG" --generate-notes
+          fi
+
+  publish:
+    needs: release
+    # The release job is skipped for `release` and `workflow_dispatch` runs;
+    # always() keeps this job eligible there. On tag pushes it still waits for
+    # a successful release.
+    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - uses: pnpm/action-setup@v6
 
@@ -55,8 +100,6 @@ jobs:
         run: pnpm test
 
       - name: Release tag must match package.json version
-        env:
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           version="$(node -p "require('./package.json').version")"
           if [ "${TAG#v}" != "$version" ]; then
