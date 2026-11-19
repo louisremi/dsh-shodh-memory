@@ -29,9 +29,13 @@
     baseUrl: http://shodh-memory:3030
     apiKeyEnv: SHODH_API_KEY
 
-    # Per-workspace namespaces (`dsh:<basename(cwd)>`) so memory from one
-    # project does not surface in another. Recommended for coding use; the
-    # bundle default is 'global'.
+    # Tenant for this container's memory. The bundle default is 'global': one
+    # tenant (`dsh`) for everything pointed at the server with that userId.
+    # 'workspace' derives the tenant from the harness container's working
+    # directory (`dsh-<dirname>`) once at startup — stable for a container, but
+    # shared by every workspace it serves, because the Web app runs them all in
+    # one process. Keep 'workspace' if this deployment already stores memories
+    # under `dsh-<dirname>`; otherwise drop the line to use the default.
     userIdScope: workspace
 
     requestTimeoutMs: 3000

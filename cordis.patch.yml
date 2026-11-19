@@ -14,9 +14,14 @@
 #   apiKeyEnv       NAME of the env var holding the X-API-Key value.
 #                 shodh generates a local key on `shodh init`.
 #   userId          shodh tenant namespace. Override with SHODH_USER_ID.
-#   userIdScope     'global'  — one namespace for every project (default)
-#                 'workspace' — `dsh:<basename(cwd)>`, so each project keeps
-#                               its own memory. Recommended for coding use.
+#   userIdScope     'global'    — one tenant for the whole harness (default):
+#                                 every session, workspace and profile sharing
+#                                 this userId reads and writes the same memory.
+#                   'workspace' — `dsh-<basename(harness cwd)>`, resolved once
+#                                 at startup, so harnesses started from
+#                                 different directories get different tenants.
+#                                 The Web app serves every workspace from one
+#                                 process, so its workspaces share that tenant.
 #
 # ── resilience ───────────────────────────────────────────────────────────────
 #   requestTimeoutMs  default per-call budget.
