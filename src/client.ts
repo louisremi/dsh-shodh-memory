@@ -122,11 +122,11 @@ export class ShodhClient {
   /**
    * The tenant a call belongs to.
    *
-   * `this.userId` is the process default — already workspace-scoped when
+   * `this.userId` is the process default — already the workspace tenant when
    * `userIdScope: 'workspace'`. A caller holding an agent may pass a more
    * specific tenant via `options.userId`; without one every call still lands in
-   * the right namespace, which is what makes per-workspace memory work for
-   * event-driven capture, where no agent is attached to the event.
+   * the right tenant, which is what keeps event-driven capture — where no agent
+   * is attached to the event — in the caller's namespace.
    *
    * @param options - the call options, possibly carrying `userId`.
    * @returns the tenant id to send.

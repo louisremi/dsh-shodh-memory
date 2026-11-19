@@ -108,8 +108,8 @@ export function apply(ctx: ShodhContext, config: unknown): void {
     baseUrl: cfg.baseUrl,
     apiKey,
     // Resolved, not raw: under `userIdScope: 'workspace'` the process default is
-    // already the per-project tenant, so event-driven capture — which has no
-    // agent attached to the event — still lands in the right namespace.
+    // the tenant of the harness's own directory, so event-driven capture — which
+    // has no agent attached to the event — still lands in the right tenant.
     userId: resolveUserId(undefined),
     requestTimeoutMs: cfg.requestTimeoutMs,
     failureThreshold: cfg.failureThreshold,
@@ -120,9 +120,16 @@ export function apply(ctx: ShodhContext, config: unknown): void {
   /**
    * Resolve the shodh tenant for a call.
    *
-   * `workspace` scope namespaces memory by project directory, so decisions made
-   * in one repo stop surfacing in another. That separation is usually what you
-   * want: "we use pnpm here" is not a fact about a different project.
+   * `global` — the default — is one tenant (`cfg.userId`) for the whole
+   * harness: every session, workspace and profile using this server with that
+   * userId shares it.
+   *
+   * `workspace` derives the tenant from the harness process's working directory
+   * (`dsh-<basename>`), fixed once at startup. An agent carrying a workspace
+   * path can override it per call, but DSH exposes the session's cwd
+   * (`agent.session.header.cwd`) rather than the `workspace` fields `AgentRef`
+   * looks for, so the process directory is what applies in practice: one tenant
+   * per harness process, shared by every workspace that process serves.
    *
    * @param agent - the agent making the call, if any.
    * @returns the tenant id.
@@ -206,9 +213,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
     '@louisremi/dsh-shodh-memory: teardown',
   );
 
-  ctx.logger?.info?.(
-    `[shodh-memory] active → ${cfg.baseUrl} (tenant ${cfg.userIdScope === 'workspace' ? 'per-workspace' : cfg.userId})`,
-  );
+  ctx.logger?.info?.(`[shodh-memory] active → ${cfg.baseUrl} (tenant ${client.userId})`);
 }
 
 /**
