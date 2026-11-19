@@ -832,44 +832,54 @@ console.log('\n[13] cleanup: propose, confirm, apply');
 // `cleanup` is a new command verb with a new report format; every string the
 // pass prints is a deliberate pin. Section [10] opened this fiber's breaker
 // with a five-second cooldown, and cleanup — correctly — honors it. Run the
-// whole phase against a fresh context: isolation, and no cooldown to race.
-const freshCtx = new Context();
-(freshCtx as unknown as { logger: unknown }).logger = {
-  info: () => {},
-  warn: () => {},
-  debug: () => {},
-  error: () => {},
-};
-new ToolsStub(freshCtx);
-const freshCommands: CommandDefinition[] = [];
-class CommandsCaptureStub extends Service {
-  register!: (def: CommandDefinition) => () => void;
-  constructor(ctx: Context) {
-    super(ctx, 'commands');
-    this.register = (def) => {
-      freshCommands.push(def);
-      return () => {};
-    };
+// whole phase against fresh contexts: isolation, and no cooldown to race.
+
+/**
+ * Boot the plugin in its own context and return its `/shodh` command.
+ * @param config - plugin config on top of the fake server's connection.
+ * @param withLlm - false boots a profile with no `llm` service at all.
+ */
+async function bootShodh(
+  config: Record<string, unknown>,
+  withLlm = true,
+): Promise<{ command: CommandDefinition; context: Context }> {
+  const context = new Context();
+  const commands: CommandDefinition[] = [];
+  class CommandsCaptureStub extends Service {
+    register!: (def: CommandDefinition) => () => void;
+    constructor(ctx: Context) {
+      super(ctx, 'commands');
+      this.register = (def) => {
+        commands.push(def);
+        return () => {};
+      };
+    }
   }
+  new ToolsStub(context);
+  new CommandsCaptureStub(context);
+  new SystemPromptStub(context);
+  new SessionsStub(context);
+  new AgentsStub(context);
+  if (withLlm) new LlmStub(context);
+  await context.plugin(entry, {
+    baseUrl,
+    apiKey: 'test-key-123',
+    requestTimeoutMs: 2000,
+    ...config,
+  });
+  const command = commands.find((c) => c.name === 'shodh');
+  assert.ok(command, '/shodh registered');
+  return { command, context };
 }
-new CommandsCaptureStub(freshCtx);
-new SystemPromptStub(freshCtx);
-new SessionsStub(freshCtx);
-new AgentsStub(freshCtx);
-new LlmStub(freshCtx);
+
 llmCalls.length = 0;
 llmRequests.length = 0;
-await freshCtx.plugin(entry, {
-  baseUrl,
-  apiKey: 'test-key-123',
-  requestTimeoutMs: 2000,
+const { command: cleanupCommand, context: freshCtx } = await bootShodh({
   // Per-workspace tenants, so two agents below resolve to different tenants
   // and the plugin's default client tenant (`dsh-<cwd>`) differs from both.
   userIdScope: 'workspace',
   cleanup: { timeoutMs: 20000 },
 });
-const cleanupCommand = freshCommands.find((c) => c.name === 'shodh');
-assert.ok(cleanupCommand, '/shodh registered in the cleanup context');
 const alpha = { workspace: { cwd: '/work/alpha' } };
 const beta = { workspace: { cwd: '/work/beta' } };
 const cleanupStart = received.length;
@@ -939,6 +949,17 @@ check(
   firstRequest.purpose === 'shodh-cleanup',
 );
 check('the request used the prepared route', firstRequest.provider === 'stub');
+const analysisSource = firstRequest.messages[0]?.source as
+  | { kind?: string; form?: string; summary?: string }
+  | undefined;
+check(
+  "the analysis message is the plugin's own notice, never a user turn",
+  firstRequest.messages.length === 1 &&
+    firstRequest.messages[0]?.role === 'user' &&
+    analysisSource?.kind === 'plugin:shodh-memory' &&
+    analysisSource?.form === 'notice' &&
+    analysisSource?.summary === 'shodh memory cleanup analysis',
+);
 check(
   'the corpus holds every scanned id',
   ['c1', 'c2', 'c3', 'c4'].every((id) => corpusText.includes(id)),
@@ -1008,33 +1029,33 @@ check(
   wrote().length === writesAfterFirst + 1 && thirdApply.text.includes('#2 already applied'),
 );
 
+// Spec 7 ("apply must only touch ids that the analysis actually saw"), end to
+// end: a model that answers only with ids it invented gets nothing applied.
+llmLinesOverride = [
+  '{"op":"delete","ids":["ghost-1"],"reason":"hallucinated"}',
+  '{"op":"merge","ids":["c2","ghost-2"],"into":"c2","text":"made up","reason":"hallucinated"}',
+];
+const ghostRun = await cleanupCommand.handler({ rawInput: 'cleanup', agent: alpha });
+llmLinesOverride = undefined;
+check(
+  'proposals naming unknown ids never reach the report',
+  ghostRun.kind === 'success' &&
+    ghostRun.text.includes('No consolidation proposed') &&
+    !ghostRun.text.includes('ghost'),
+);
+const writesBeforeGhostApply = wrote().length;
+const ghostApply = await cleanupCommand.handler({ rawInput: 'cleanup apply all', agent: alpha });
+check(
+  '…so apply has nothing to run and writes nothing',
+  ghostApply.kind === 'error' &&
+    ghostApply.text.includes('nothing to apply') &&
+    wrote().length === writesBeforeGhostApply,
+);
+
 // Spec 6: the timeout bounds the inventory too, not just the model call.
-const slowCtx = new Context();
-const slowCommands: CommandDefinition[] = [];
-class SlowCommandsStub extends Service {
-  register!: (def: CommandDefinition) => () => void;
-  constructor(ctx: Context) {
-    super(ctx, 'commands');
-    this.register = (def) => {
-      slowCommands.push(def);
-      return () => {};
-    };
-  }
-}
-new ToolsStub(slowCtx);
-new SlowCommandsStub(slowCtx);
-new SystemPromptStub(slowCtx);
-new SessionsStub(slowCtx);
-new AgentsStub(slowCtx);
-new LlmStub(slowCtx);
-await slowCtx.plugin(entry, {
-  baseUrl,
-  apiKey: 'test-key-123',
-  requestTimeoutMs: 2000,
+const { command: slowCommand, context: slowCtx } = await bootShodh({
   cleanup: { timeoutMs: 1000 },
 });
-const slowCommand = slowCommands.find((c) => c.name === 'shodh');
-assert.ok(slowCommand, '/shodh registered in the slow-server context');
 listDelayMs = 3000;
 const llmCallsBefore = llmCalls.length;
 const slowStarted = Date.now();
@@ -1045,6 +1066,21 @@ check('a slow inventory hits the cleanup timeout', slowOut.text.includes('timed 
 check('…well before the slow server answers', slowElapsed < 2500);
 check('…without ever calling the model', llmCalls.length === llmCallsBefore);
 await slowCtx.fiber.dispose();
+
+// Spec 8: a profile with no LLM service says so and touches nothing.
+const { command: noLlmCommand, context: noLlmCtx } = await bootShodh({}, false);
+const requestsBeforeNoLlm = received.length;
+const noLlmOut = await noLlmCommand.handler({ rawInput: 'cleanup', agent: {} });
+check(
+  'without an LLM service cleanup errors with the reason',
+  noLlmOut.kind === 'error' &&
+    noLlmOut.text ===
+      'Cleanup unavailable: no LLM service is available in this profile, so cleanup cannot run.',
+);
+check('…before any request reaches shodh', received.length === requestsBeforeNoLlm);
+const noLlmStatus = await noLlmCommand.handler({ rawInput: 'status', agent: {} });
+check('…and the rest of /shodh still works', noLlmStatus.kind === 'success');
+await noLlmCtx.fiber.dispose();
 
 llmMode = 'empty';
 const emptyOut = await cleanupCommand.handler({ rawInput: 'cleanup', agent: alpha });

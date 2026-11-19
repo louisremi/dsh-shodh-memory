@@ -16,7 +16,7 @@
  *    memories the analysis actually saw, get touched.
  *
  * The LLM call mirrors upstream's one-shot pattern (dsh-session-title-llm):
- * `ctx.llm.prepareCall(route)` → dispatch with the *prepared* config spread
+ * `llm.prepareCall(route)` → dispatch with the *prepared* config spread
  * into the request → assemble chunks → read the finish reason. The call-config
  * fields of the request must match the prepared config exactly, or the runtime
  * rejects the dispatch.
@@ -24,7 +24,7 @@
  * @module cleanup
  */
 
-import type { ShodhClient, ShodhError as ShodhErrorType } from './client.js';
+import type { ShodhClient } from './client.js';
 import type {
   BlockAssemblerCtor,
   CleanupProposal,
@@ -33,6 +33,7 @@ import type {
   JsonRecord,
   JsonValue,
   ListMemoryItem,
+  LlmRuntimeLike,
   PluginState,
   ShodhConfig,
   ShodhContext,
@@ -40,7 +41,7 @@ import type {
 
 /** Everything runCleanup needs, all injected — no ambient host access. */
 export interface CleanupDeps {
-  /** The cordis context; `ctx.llm` is read at call time, never captured. */
+  /** The cordis context; the `llm` service is looked up at call time, never captured. */
   ctx: ShodhContext;
   /** A {@link ShodhClient}. */
   client: ShodhClient;
@@ -116,7 +117,10 @@ export async function runCleanup(
 ): Promise<string> {
   const { ctx, client, cfg } = deps;
 
-  const llm = ctx.llm;
+  // `llm` is a soft capability, deliberately not in `inject`. Reading an
+  // un-injected service as a property throws in cordis, so look it up with
+  // `get`, which answers `undefined` when the profile has no llm service.
+  const llm = ctx.get?.('llm') as LlmRuntimeLike | undefined;
   if (!llm) return errorText('no LLM service is available in this profile, so cleanup cannot run.');
   if (!deps.createUserMessage || !deps.BlockAssembler) {
     return errorText('@deepseek-ai/dsh-llm is unavailable, so cleanup cannot run.');
@@ -149,7 +153,7 @@ export async function runCleanup(
 
     // ── one-shot LLM pass ────────────────────────────────────────────────────
     const { corpus, dropped, seenIds, fullIds } = renderCorpus(items, cfg.cleanup.maxInputBytes);
-    const text = await askLlm(deps, route, corpus, deadline.signal);
+    const text = await askLlm(deps, llm, route, corpus, deadline.signal);
     const proposals = parseProposals(text).filter((p) => proposalAllowed(p, seenIds, fullIds));
     await chooseKeepers(client, tenant, proposals, items, deadline.signal);
     const report: CleanupReport = {
@@ -284,7 +288,7 @@ export async function applyCleanup(
 }
 
 /**
- * Pick which memory each merge keeps. The model's `into` is ignored on purpose.
+ * Pick which memory each merge keeps. The model's `into` only breaks ties.
  *
  * A merge rewrites one memory in place (`PUT` replaces its text and keeps its
  * id, importance, and access count) and deletes the rest, together with
@@ -511,7 +515,7 @@ async function fillOne(
 
 /** Resolve the route: explicit config pair, else first provider's first model. */
 async function resolveRoute(
-  llm: NonNullable<ShodhContext['llm']>,
+  llm: LlmRuntimeLike,
   cfg: ShodhConfig,
 ): Promise<{ provider: string; model: string } | undefined> {
   const { provider, model } = cfg.cleanup;
@@ -577,13 +581,13 @@ export function renderCorpus(items: ListMemoryItem[], maxInputBytes: number): Co
  */
 async function askLlm(
   deps: CleanupDeps,
+  llm: LlmRuntimeLike,
   route: { provider: string; model: string },
   corpus: string,
   signal: AbortSignal,
 ): Promise<string> {
-  const { ctx, cfg } = deps;
-  const llm = ctx.llm;
-  if (!llm || !deps.createUserMessage || !deps.BlockAssembler) {
+  const { cfg } = deps;
+  if (!deps.createUserMessage || !deps.BlockAssembler) {
     throw new Error('cleanup is unavailable');
   }
   const call = await llm.prepareCall({ ...route, maxTokens: cfg.cleanup.maxOutputTokens }, signal);
@@ -724,7 +728,7 @@ export function renderCleanupReport(
   report.proposals.forEach((proposal, i) => {
     const n = i + 1;
     if (proposal.op === 'merge') {
-      lines.push(`${n}. merge ${proposal.ids.length} memories → ${proposal.into ?? 'new memory'}`);
+      lines.push(`${n}. merge ${proposal.ids.length} memories → ${proposal.into}`);
     } else {
       lines.push(`${n}. delete ${proposal.ids[0] ?? `${proposal.ids.length} memories`}`);
     }
@@ -813,6 +817,3 @@ function newDeadline(
     },
   };
 }
-
-// `ShodhErrorType` is re-exported only for its documentation value above.
-export type { ShodhErrorType };

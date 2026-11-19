@@ -74,8 +74,6 @@ export interface ProactiveContextInput {
 export interface ListMemoriesInput {
   limit?: number;
   offset?: number;
-  type?: string;
-  query?: string;
 }
 
 export class ShodhClient {
@@ -382,27 +380,17 @@ export class ShodhClient {
   /**
    * Page through the stored memories, newest first.
    *
-   * `total` in the response is the filter-matched count, so a caller pages by
+   * `total` in the response is the tenant's memory count, so a caller pages by
    * advancing `offset` by `limit` until it has `total` items. Item content is a
    * server-side preview (500 chars); {@link getMemory} fetches the full text of
    * any item that reports itself truncated.
    *
-   * @param input - page window and optional filters.
+   * @param input - the page window.
    * @param options - per-call overrides.
    * @returns the list response (`{ memories, total }`).
    */
-  listMemories({ limit = 100, offset = 0, type, query }: ListMemoriesInput, options?: CallOptions) {
-    return this.call(
-      '/api/memories',
-      {
-        user_id: this.uid(options),
-        limit,
-        offset,
-        ...(type ? { type } : {}),
-        ...(query ? { query } : {}),
-      },
-      options,
-    );
+  listMemories({ limit = 100, offset = 0 }: ListMemoriesInput, options?: CallOptions) {
+    return this.call('/api/memories', { user_id: this.uid(options), limit, offset }, options);
   }
 
   /**

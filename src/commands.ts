@@ -35,7 +35,7 @@ export interface CommandDeps {
   state: PluginState;
   /** Tenant resolver. */
   resolveUserId: TenantResolver;
-  /** The cordis context, for the cleanup pass's `ctx.llm` access. */
+  /** The cordis context; the cleanup pass looks up the optional `llm` service on it. */
   ctx: ShodhContext;
   /** The `createUserMessage` factory, when available (cleanup input message). */
   createUserMessage?: CleanupDeps['createUserMessage'];

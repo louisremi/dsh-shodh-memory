@@ -218,13 +218,6 @@ export interface PromptSection {
  */
 export interface ShodhContext {
   logger?: ShodhLogger;
-  /**
-   * The harness LLM runtime, present when an llm service is in the profile.
-   * Soft capability: unlike `tools` it is deliberately NOT in `inject`, so a
-   * profile without an llm service still boots the plugin; only `/shodh
-   * cleanup` needs it and it degrades there with a clear message.
-   */
-  llm?: LlmRuntimeLike;
   tools: {
     register(definition: ToolDefinition): () => void;
   };
@@ -251,9 +244,11 @@ export interface ShodhContext {
   ): () => void;
   effect(callback: () => () => void, name?: string): void;
   /**
-   * Look up a service that may be absent. Used for the Web/Desktop-only
-   * terminal services, which must not be in `inject`: a headless profile has
-   * neither, and the rest of the plugin has to keep working there.
+   * Look up a service that may be absent. Used for the services that must not
+   * be in `inject`, because the rest of the plugin has to keep working without
+   * them: the Web/Desktop-only terminal services, and `llm` (as
+   * {@link LlmRuntimeLike}), which only `/shodh cleanup` needs. Never read
+   * these as `ctx.<name>`: cordis throws for an un-injected property.
    */
   get?(name: string): unknown;
 }

@@ -446,9 +446,11 @@ by targeting the row `id: shodh-memory` in `$DSH_HOME/cordis.patch.yml` or a
 | `tui.cols`, `tui.rows` | `120`, `36` | Initial grid; the sidebar refits it to the panel |
 | `failureCooldownMs` | `30000` | How long a dead server is ignored before a probe |
 | `cleanup.maxMemories` | `200` | Newest memories a `/shodh cleanup` scan covers |
+| `cleanup.maxFetches` | `40` | Full-text reads for list previews shodh cut at 500 chars. A memory left as a preview can be deleted but never merged |
 | `cleanup.maxInputBytes` | `120000` | Hard budget for the corpus sent to the model |
+| `cleanup.maxOutputTokens` | `4000` | Output cap for the analysis; a reply cut short loses only its unfinished last proposal |
 | `cleanup.provider` / `.model` | first registered | Pin the analysis route; unset uses the profile's first provider and model |
-| `cleanup.timeoutMs` | `45000` | Wall-clock budget for the whole cleanup pass |
+| `cleanup.timeoutMs` | `45000` | Wall-clock budget for the whole pass (list, fetches, model), and separately for each `apply` |
 
 ### Recommended: per-project memory
 
