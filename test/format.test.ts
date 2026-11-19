@@ -35,7 +35,7 @@ function check(label: string, condition: unknown): void {
 // say" — which drove agents to read shodh's store out from under the plugin.
 const LONG =
   'CANONICAL tailnet SSH from the DSH harness container. ' +
-  'The container key authenticates on nasbrico only; every other tailnet peer gates behind Tailscale SSH. '.repeat(
+  'The container key authenticates on one host only; every other tailnet peer gates behind Tailscale SSH. '.repeat(
     3,
   );
 const memory: RenderableMemory = {

@@ -1,5 +1,6 @@
-// Live check: real ShodhClient against the real shodh-memory container on nasbrico.
-// Run from inside the harness container where shodh-memory:3030 resolves.
+// Live check: real ShodhClient against a live shodh-memory server (`SHODH_BASE`).
+// Run from a container on the same Docker network, where shodh-memory:3030
+// resolves.
 import { ShodhClient } from '/workspace/shodh-memory-dsh-integration/dist/client.js';
 import {
   normalizeMemory,

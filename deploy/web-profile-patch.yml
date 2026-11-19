@@ -1,33 +1,31 @@
-# Your patch layer for this dsh profile, applied after every bundle layer:
+# Example patch layer for a dsh profile, applied after every bundle layer:
 # a top-level YAML array of loader patch entries (id-targeted config
 # overrides, disables, and insert lists; `!!js` expressions allowed).
+# Copy the entries you need into your profile's `cordis.patch.yml`.
 
-# NOTE: The Home Assistant MCP lives in the `ha` profile, not here.
-# ha-mcp's 78 tool definitions cost ~64,800 tokens (~25% of the 262k context
-# window) on every request, so it is kept out of the default `web` profile.
-# Boot `dsh --profile ha` when working on Home Assistant.
-# See /dsh/profiles/ha/cordis.patch.yml for the config and why its URL differs
-# from the Claude Code one.
+# NOTE: an MCP server with a large tool surface belongs in its own profile,
+# not in the one used for coding. 78 tool definitions is ~64,800 tokens (~25%
+# of a 262k context window) on every request, so boot that server under a
+# separate profile and switch to it only when you work with it.
 
-# Added 2026-09-19: point the shodh-memory plugin at the shodh-memory service
-# in this project's own docker-compose.yml (same docker-compose-nas network),
-# instead of the bundle default of 127.0.0.1:3030.
+# Point the shodh-memory plugin at the shodh-memory compose service instead of
+# the bundle default of 127.0.0.1:3030.
 #
 # IMPORTANT — a patch REPLACES the whole `config` block of the row it targets,
-# it does not deep-merge. So every field we want kept must be restated here;
+# it does not deep-merge. So every field you want kept must be restated here;
 # anything omitted falls back to the plugin's own normalizeConfig() defaults in
 # src/config.js, not to the bundle's values. See the bundle layer in
 # '@louisremi/dsh-shodh-memory'/cordis.patch.yml for what each field does.
 #
-# The API key is read from the SHODH_API_KEY env var (set on the
-# deepseek-harness container in docker-compose.yml, sourced from .env).
-# `apiKeyEnv` names that variable; the plugin never sees the key in config.
+# The API key is read from the SHODH_API_KEY env var (set in the DSH
+# container's environment, ideally from a .env file). `apiKeyEnv` names that
+# variable; the plugin never sees the key in config.
 - id: shodh-memory
   config:
-    # Reachable by compose service name over docker-compose-nas. Deliberately
-    # NOT the tailscale/tsdproxy hostname: containers in this network cannot
-    # resolve *.tail668c20.ts.net, same reason the harness talks to the
-    # Halogen and Paiton routes by raw address.
+    # Reachable by compose service name, which is what services in one compose
+    # file resolve each other by. Loopback would be the DSH container itself.
+    # Do not put a published hostname (reverse proxy, tailnet) here: it would
+    # expose a store that holds every prompt.
     baseUrl: http://shodh-memory:3030
     apiKeyEnv: SHODH_API_KEY
 
