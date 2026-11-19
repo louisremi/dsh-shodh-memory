@@ -296,6 +296,29 @@ Confirm it is up:
 curl http://localhost:3030/health     # {"status":"ok"}
 ```
 
+**DSH and shodh both in Docker Compose.** These are lessons from a long-running
+deployment (DSH and shodh-memory 0.2.0 on Unraid). The full annotated service
+block is [deploy/shodh-compose-block.yml](deploy/shodh-compose-block.yml).
+
+- **`SHODH_ENV=true`, not `production`.** The image maps this variable to the
+  boolean `--production` flag, so the value from upstream's docs stops the
+  server at startup: `invalid value 'production' for '--production'`.
+- **Fix the data volume's owner first.** The server runs as uid 1000, but a new
+  named volume can belong to another user, and RocksDB then fails with
+  `Permission denied (os error 13)`. A one-shot `alpine` service that runs
+  `chown 1000:1000 /data` before the server fixes it.
+- **Use a named volume, not a FUSE share** such as Unraid's `/mnt/user`.
+  RocksDB needs real file locking.
+- **Probe health with `curl`.** The image has no `wget`, so a `wget` probe
+  marks the container unhealthy forever while the server answers fine.
+- **One key, two names.** The server takes `SHODH_API_KEYS`; the DSH container
+  gets the same value as `SHODH_API_KEY` (or whatever `apiKeyEnv` names).
+  Keep it in `.env`, not in a patch file.
+- **`baseUrl` is the service name**, for example `http://shodh-memory:3030`,
+  with both containers on one Docker network. Loopback is the DSH container
+  itself. The image already binds `0.0.0.0` (the bare binary defaults to
+  `127.0.0.1`). It needs no published port.
+
 #### 2. Export the API key
 
 The plugin reads the key from an environment variable (name configurable via

@@ -47,10 +47,10 @@
         condition: service_completed_successfully
 
     environment:
-      # Bind inside the container so tsdproxy / sibling containers on
-      # docker-compose-nas can reach it. Upstream defaults to 127.0.0.1, which
-      # under bridge networking is unreachable from anywhere else -- the exact
-      # silent-failure trap documented on the qwen38 service on NASBIS.
+      # Bind all interfaces so sibling containers can reach it. The 0.2.0 image
+      # already sets this; it is restated because the `shodh` binary itself
+      # defaults to 127.0.0.1, which under bridge networking is unreachable from
+      # any other container.
       - SHODH_HOST=0.0.0.0
       - SHODH_PORT=3030
       # Production mode. NOTE: this is a BOOLEAN flag in the binary, not a
@@ -77,6 +77,13 @@
     # LAN would only widen exposure of a store that holds every prompt.
     expose:
       - "3030"
+
+    # Both networks: keeps docker-compose-nas so anything reaching it today is
+    # unaffected, and joins dsh-net (the harness's private segment) so
+    # deepseek-harness can still resolve `shodh-memory` by name.
+    networks:
+      - default
+      - dsh-net
 
     volumes:
       # Named volume, not a bind mount: shodh runs on RocksDB, which needs real
