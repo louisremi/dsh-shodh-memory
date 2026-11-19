@@ -507,6 +507,10 @@ check(
     '/shodh tui install       Download the shodh-tui binary (or a [version] of it)',
   ),
 );
+check(
+  'help lists tui clean',
+  helpOut.text.includes('/shodh tui clean [all]   Remove downloaded binaries it no longer runs'),
+);
 check('the input hint offers tui', Boolean(command.input?.hint?.includes('| tui]')));
 
 console.log('\n[9b] /shodh tui');

@@ -103,6 +103,16 @@ export function installedPath(root: string, tag: ReleaseTag): string {
 }
 
 /**
+ * Delete one managed install.
+ * @param root - {@link tuiRoot}.
+ * @param tag - an installed tag, from {@link listInstalled}; being a
+ *   {@link ReleaseTag}, it cannot name anything outside `root`.
+ */
+export async function removeInstalled(root: string, tag: ReleaseTag): Promise<void> {
+  await rm(join(root, tag), { recursive: true, force: true });
+}
+
+/**
  * Release tags with an installed binary, newest first.
  * @param root - {@link tuiRoot}.
  * @returns the tags; empty when nothing is installed.

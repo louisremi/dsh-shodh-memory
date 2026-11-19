@@ -382,6 +382,25 @@ console.log('\n[5] which binary runs');
     (await pick({ tui: { path: '' }, health: { version: '9.9.9' } }, all)) === managed('v0.3.0'),
   );
 
+  const opened = async (overrides: Parameters<typeof tui>[1]) =>
+    tui(host({ home: stockedHome }), overrides).run({ agent: agent('s', all) }, '');
+  const behind = await opened({ tui: { path: '' }, health: { version: '9.9.9' } });
+  check(
+    'a server newer than every install: opened, with a hint to install its version',
+    behind.kind === 'success' &&
+      behind.text.includes('shodh-tui v0.3.0, but the server runs v9.9.9') &&
+      behind.text.includes('/shodh tui install'),
+  );
+  const matched = await opened({ tui: { path: '' }, health: { version: '0.2.0' } });
+  check('a matching install: no hint', !matched.text.includes('server runs'));
+  const unknown = await opened({ tui: { path: '' }, health: undefined });
+  check('server unreachable: no hint', !unknown.text.includes('server runs'));
+  const pinned = await opened({
+    tui: { path: '', version: '0.1.90' },
+    health: { version: '0.2.0' },
+  });
+  check('a configured version: no hint', !pinned.text.includes('server runs'));
+
   const h = host();
   await tui(h, { tui: { path: '' } }).run({ agent: agent('s', ['shodh-tui']) }, '');
   check(
@@ -593,6 +612,48 @@ console.log('\n[10] /shodh tui install');
     (await readdir(join(emptyHome, 'plugins', 'shodh-memory', 'tui')).catch(() => [])).length === 0,
   );
   github.close();
+}
+
+console.log('\n[11] /shodh tui clean');
+{
+  const home = await mkdtemp(join(tmpdir(), 'shodh-tui-home-'));
+  const root = join(home, 'plugins', 'shodh-memory', 'tui');
+  const stock = async (tags: string[]) => {
+    for (const tag of tags) {
+      await mkdir(join(root, tag), { recursive: true });
+      await writeFile(join(root, tag, 'shodh-tui'), '#!/bin/sh\n');
+    }
+  };
+  const left = async () => (await readdir(root).catch(() => [])).sort().join();
+  const clean = (argument: string, health?: Record<string, unknown>) =>
+    tui(host({ home }), { tui: { path: '' }, health }).run({}, `clean${argument}`);
+
+  await stock(['v0.1.90', 'v0.2.0', 'v0.3.0']);
+  const some = await clean('', { version: '0.2.0' });
+  check('keeps the version /shodh tui would run', (await left()) === 'v0.2.0');
+  check(
+    '…and says what it removed and kept',
+    some.kind === 'success' &&
+      some.text.includes('v0.3.0, v0.1.90') &&
+      some.text.includes('Kept v0.2.0'),
+  );
+  const none = await clean('', { version: '0.2.0' });
+  check(
+    'nothing else to remove is a success',
+    none.kind === 'success' && none.text.includes('No shodh-tui download'),
+  );
+
+  await stock(['v0.3.0']);
+  await clean('', undefined);
+  check('server unreachable: keeps the newest', (await left()) === 'v0.3.0');
+
+  const all = await clean(' all');
+  check('`all` removes every install', (await left()) === '' && all.text.includes('v0.3.0'));
+  check('…and keeps none', !all.text.includes('Kept'));
+
+  const bad = await clean(' everything');
+  check('an unknown argument shows usage', bad.kind === 'error' && bad.text.startsWith('Usage:'));
+  await rm(home, { recursive: true, force: true });
 }
 
 console.log(`\n${passed} checks passed.\n`);

@@ -33,6 +33,7 @@ import {
   normalizeTag,
   type ReleaseTag,
   releaseAsset,
+  removeInstalled,
   TUI_BINARY,
   tuiRoot,
 } from './tui-install.js';
@@ -69,6 +70,7 @@ export const MISSING_BINARY = `No ${TUI_BINARY} binary found.`;
 export const TUI_HELP = [
   '/shodh tui               Open the shodh dashboard in the right panel',
   '/shodh tui install       Download the shodh-tui binary (or a [version] of it)',
+  '/shodh tui clean [all]   Remove downloaded binaries it no longer runs',
 ];
 
 /** Dependencies for {@link createTui}. */
@@ -94,7 +96,7 @@ export interface TuiTestHooks {
 /** The `/shodh tui` verb. */
 export interface Tui {
   /**
-   * Run `/shodh tui [install [version]]`.
+   * Run `/shodh tui [install [version] | clean [all]]`.
    * @param invocation - the command invocation.
    * @param argument - the text after `tui`.
    * @returns the command result.
@@ -214,13 +216,17 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
     }
 
     terminals.set(sessionKey(agent), outcome.terminal);
-    return {
-      kind: 'success',
-      text: [
-        `Opened "${TUI_TITLE}" in the right panel.`,
-        `Pick the profile "${resolveUserId(agent)}" there to see this session's memories.`,
-      ].join('\n'),
-    };
+    const lines = [
+      `Opened "${TUI_TITLE}" in the right panel.`,
+      `Pick the profile "${resolveUserId(agent)}" there to see this session's memories.`,
+    ];
+    if (binary.mismatch) {
+      const { running, server } = binary.mismatch;
+      lines.push(
+        `This is ${TUI_BINARY} ${running}, but the server runs ${server}. Run /shodh tui install to match it.`,
+      );
+    }
+    return { kind: 'success', text: lines.join('\n') };
   }
 
   /**
@@ -232,12 +238,15 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
    * @param root - {@link tuiRoot}.
    * @param signal - cancellation.
    * @returns the absolute path, or an error message fit for the command result.
+   *   A managed install that is not the server's version carries both versions.
    */
   async function resolveBinary(
     agent: AgentRef,
     root: string,
     signal: AbortSignal,
-  ): Promise<{ path: string } | { error: string }> {
+  ): Promise<
+    { path: string; mismatch?: { running: ReleaseTag; server: ReleaseTag } } | { error: string }
+  > {
     const subprocess = agent.ctx?.get?.('subprocess') as SubprocessLike | undefined;
     const locate = (command: string) =>
       typeof subprocess?.resolveExecutable === 'function'
@@ -258,9 +267,15 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
 
     const installed = await listInstalled(root);
     if (installed.length > 0) {
-      const tag = await preferredTag(installed);
+      const { tag, server } = await preferredTag(installed);
       const managed = await locate(installedPath(root, tag));
-      if (managed) return { path: managed };
+      if (managed) {
+        // A server upgrade does not install a new TUI; say so rather than
+        // quietly running one that may not speak its API.
+        return server && server !== tag
+          ? { path: managed, mismatch: { running: tag, server } }
+          : { path: managed };
+      }
     }
 
     const onPath = await locate(TUI_BINARY);
@@ -276,18 +291,19 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
   }
 
   /**
-   * Pick among several managed installs: configured, then the server's, then newest.
+   * Pick among managed installs: configured, then the server's, then newest.
    * @param installed - from {@link listInstalled}, newest first; never empty.
-   * @returns the tag to run.
+   * @returns the tag to run, and the server's tag when it answered and no
+   *   version is configured (a configured version is a deliberate choice).
    */
-  async function preferredTag(installed: ReleaseTag[]): Promise<ReleaseTag> {
+  async function preferredTag(
+    installed: ReleaseTag[],
+  ): Promise<{ tag: ReleaseTag; server?: ReleaseTag }> {
     const configured = normalizeTag(cfg.tui.version);
-    if (configured && installed.includes(configured)) return configured;
-    if (installed.length > 1) {
-      const server = await serverTag();
-      if (server && installed.includes(server)) return server;
-    }
-    return installed[0] as ReleaseTag;
+    if (configured && installed.includes(configured)) return { tag: configured };
+    const server = await serverTag();
+    if (server && installed.includes(server)) return { tag: server, server };
+    return { tag: installed[0] as ReleaseTag, server };
   }
 
   /** @returns the release tag matching the running server, when it answers. */
@@ -358,6 +374,42 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
     }
   }
 
+  /**
+   * `/shodh tui clean [all]`: delete managed installs.
+   * @param argument - `all` to delete every one; empty to keep the one `/shodh tui` runs.
+   * @returns the command result.
+   */
+  async function clean(argument: string): Promise<CommandResult> {
+    const everything = argument.toLowerCase() === 'all';
+    if (argument && !everything) {
+      return { kind: 'error', text: ['Usage:', ...TUI_HELP].join('\n') };
+    }
+    const root = managedRoot();
+    const installed = await listInstalled(root);
+    const keep =
+      everything || installed.length === 0 ? undefined : (await preferredTag(installed)).tag;
+    const doomed = installed.filter((tag) => tag !== keep);
+    const removed: ReleaseTag[] = [];
+    const failed: string[] = [];
+    for (const tag of doomed) {
+      try {
+        // A TUI already running from it keeps running: the open file outlives its name.
+        await removeInstalled(root, tag);
+        removed.push(tag);
+      } catch (error) {
+        failed.push(`${tag}: ${errorMessage(error)}`);
+      }
+    }
+    const lines = [
+      removed.length > 0
+        ? `Removed ${TUI_BINARY} ${removed.join(', ')}.`
+        : `No ${TUI_BINARY} download to remove.`,
+    ];
+    if (keep) lines.push(`Kept ${keep}, the one /shodh tui runs.`);
+    if (failed.length > 0) lines.push('Could not remove:', ...failed.map((line) => `  ${line}`));
+    return { kind: failed.length > 0 ? 'error' : 'success', text: lines.join('\n') };
+  }
+
   return {
     run(invocation, argument) {
       if (!cfg.tui.enabled) {
@@ -370,6 +422,7 @@ export function createTui(ctx: ShodhContext, deps: TuiDeps, hooks: TuiTestHooks 
       const rest = argument.slice(verb.length).trim();
       if (verb === '') return open(invocation);
       if (verb.toLowerCase() === 'install') return install(invocation, rest);
+      if (verb.toLowerCase() === 'clean') return clean(rest);
       return Promise.resolve({
         kind: 'error',
         text: ['Usage:', ...TUI_HELP].join('\n'),
