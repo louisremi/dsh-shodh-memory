@@ -1,7 +1,7 @@
 /**
  * Minimal HTTP client for the shodh-memory REST API.
  *
- * Deliberately dependency-free: Node 18+ ships a global `fetch`, and a memory
+ * Deliberately dependency-free: Node ships a global `fetch`, and a memory
  * plugin should not drag a transport library into the harness process.
  *
  * The one piece of real machinery here is the circuit breaker. This client is
