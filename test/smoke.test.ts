@@ -501,7 +501,12 @@ const badOut = await command.handler({ rawInput: 'bogus', agent: {} });
 check('unknown subcommand errors', badOut.kind === 'error');
 const helpOut = await command.handler({ rawInput: 'help', agent: {} });
 check('help lists the tui verb', helpOut.text.includes('/shodh tui '));
-check('help lists tui install', helpOut.text.includes('/shodh tui install'));
+check(
+  'help lists tui install',
+  helpOut.text.includes(
+    '/shodh tui install       Download the shodh-tui binary (or a [version] of it)',
+  ),
+);
 check('the input hint offers tui', Boolean(command.input?.hint?.includes('| tui]')));
 
 console.log('\n[9b] /shodh tui');

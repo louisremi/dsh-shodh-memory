@@ -124,7 +124,7 @@ Human-facing control that costs the model nothing:
 /shodh summary           Recent decisions, learnings, and context
 /shodh forget <id>       Delete one memory                     (alias: delete)
 /shodh tui               Open the shodh dashboard in the right panel
-/shodh tui install       Download the shodh-tui binary it runs
+/shodh tui install       Download the shodh-tui binary (or a [version] of it)
 /shodh help              Usage
 ```
 

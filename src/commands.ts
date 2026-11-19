@@ -88,7 +88,7 @@ const HELP = [
   '/shodh summary           Recent decisions, learnings, and context',
   '/shodh forget <id>       Delete one memory',
   '/shodh tui               Open the shodh dashboard in the right panel',
-  '/shodh tui install       Download the shodh-tui binary it runs',
+  '/shodh tui install       Download the shodh-tui binary (or a [version] of it)',
 ].join('\n');
 
 /**
