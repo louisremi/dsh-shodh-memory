@@ -119,7 +119,7 @@
 .shodh-tui-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.4}
 .shodh-tui-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.4}
 .shodh-tui-reply{white-space:pre-wrap;overflow-wrap:anywhere}
-.shodh-tui-error{color:var(--dsw-alias-label-error)}`;
+.shodh-tui-error{color:var(--dsw-alias-state-error-primary)}`;
 
       /**
        * The start-page card: one click, one `/shodh tui`. When that fails for
