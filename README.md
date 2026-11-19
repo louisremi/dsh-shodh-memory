@@ -142,6 +142,12 @@ changes nothing.
 
 Apply only trusts what the analysis actually showed the model:
 
+- **The most reinforced memory survives a merge.** shodh raises a memory's
+  `importance` each time it is recalled or marked helpful. A merge rewrites
+  one memory and deletes the others along with everything shodh learned about
+  them, so the plugin — not the model — picks the survivor: highest
+  `importance`, then highest access count. The report marks it `(kept: most
+  reinforced)`.
 - **No merge over unseen text.** A merge rewrites one memory and deletes the
   others, so every memory it names must have reached the model whole. A
   memory still truncated, or cut at the 1,200-char line cap, can be proposed

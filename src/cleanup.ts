@@ -69,9 +69,11 @@ const SYSTEM_PROMPT = [
   '',
   'Propose the smallest set of edits that removes duplication and staleness:',
   '- "merge": two or more memories say (nearly) the same thing, or several belong',
-  '  in one consolidated statement. Provide `into` = the id worth keeping, `text`',
-  '  = the consolidated replacement written for the kept memory. Prefer merging',
-  '  2-4 closely related memories; never merge across unrelated topics.',
+  '  in one consolidated statement. Provide `text` = the consolidated replacement.',
+  '  The plugin keeps whichever merged memory the store has reinforced most and',
+  '  rewrites it with `text`, so `text` must stand alone. `into` is optional and',
+  '  only breaks ties. Prefer merging 2-4 closely related memories; never merge',
+  '  across unrelated topics.',
   '- "delete": the memory is obsolete or superseded by another listed memory and',
   '  keeping it would mislead. Prefer merge/delete over delete when a correction',
   '  exists; keep memories about durable environment facts.',
@@ -149,6 +151,7 @@ export async function runCleanup(
     const { corpus, dropped, seenIds, fullIds } = renderCorpus(items, cfg.cleanup.maxInputBytes);
     const text = await askLlm(deps, route, corpus, deadline.signal);
     const proposals = parseProposals(text).filter((p) => proposalAllowed(p, seenIds, fullIds));
+    await chooseKeepers(client, tenant, proposals, items, deadline.signal);
     const report: CleanupReport = {
       tenant,
       proposals,
@@ -278,6 +281,74 @@ export async function applyCleanup(
 
   lines.unshift(`Applied ${done} proposal(s), ${failed} problem(s):`);
   return lines.join('\n');
+}
+
+/**
+ * Pick which memory each merge keeps. The model's `into` is ignored on purpose.
+ *
+ * A merge rewrites one memory in place (`PUT` replaces its text and keeps its
+ * id, importance, and access count) and deletes the rest, together with
+ * everything shodh learned about them. So the survivor must be the memory
+ * shodh has reinforced the most: highest `importance` (which recalls and
+ * feedback raise), then highest `access_count`. Remaining ties keep the
+ * model's order, which puts its own pick first.
+ *
+ * `importance` comes with the list; `access_count` does not, so it is read
+ * with one GET per merged memory. A failed read counts as unknown, never as a
+ * reason to drop the proposal.
+ *
+ * @param proposals - the report's proposals; each merge's `into` is set in place.
+ * @param items - the scanned memories, for their `importance`.
+ */
+async function chooseKeepers(
+  client: ShodhClient,
+  tenant: string,
+  proposals: CleanupProposal[],
+  items: ListMemoryItem[],
+  signal: AbortSignal,
+): Promise<void> {
+  const merges = proposals.filter((p) => p.op === 'merge');
+  if (merges.length === 0) return;
+
+  const importance = new Map(items.map((m) => [m.id, m.importance]));
+  const ids = [...new Set(merges.flatMap((p) => p.ids))];
+  const accessCounts = new Map<string, number>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const full = await client
+        .getMemory(id, { userId: tenant, timeoutMs: 5000, signal })
+        .catch((error: unknown) => {
+          if (signal.aborted) throw error;
+          return undefined;
+        });
+      const count = full?.access_count ?? full?.accessCount;
+      if (typeof count === 'number' && Number.isFinite(count)) accessCounts.set(id, count);
+    }),
+  );
+
+  for (const proposal of merges) {
+    proposal.into = rankKeepers(proposal.ids, importance, accessCounts)[0];
+  }
+}
+
+/**
+ * Order merge candidates best-kept first: importance, then access count (an
+ * unknown count ranks below any known one), then the given order.
+ */
+export function rankKeepers(
+  ids: string[],
+  importance: Map<string, number>,
+  accessCounts: Map<string, number>,
+): string[] {
+  return ids
+    .map((id, order) => ({
+      id,
+      order,
+      importance: importance.get(id) ?? 0,
+      accesses: accessCounts.get(id) ?? -1,
+    }))
+    .sort((a, b) => b.importance - a.importance || b.accesses - a.accesses || a.order - b.order)
+    .map((candidate) => candidate.id);
 }
 
 /**
@@ -604,15 +675,14 @@ export function parseProposals(text: string): CleanupProposal[] {
       : [];
     if (ids.length === 0) continue;
     if (op === 'merge' && (typeof item.text !== 'string' || item.text.trim() === '')) continue;
+    // The model's `into` is a hint only: it moves to the front of `ids`, so it
+    // wins ties when the keeper is picked by reinforcement (see chooseKeepers).
+    const hint = typeof item.into === 'string' && ids.includes(item.into) ? item.into : undefined;
+    const unique = [...new Set(hint ? [hint, ...ids] : ids)];
     proposals.push({
       op,
-      ids: [...new Set(ids)],
-      into:
-        typeof item.into === 'string' && ids.includes(item.into)
-          ? item.into
-          : op === 'merge'
-            ? ids[0]
-            : undefined,
+      ids: unique,
+      into: op === 'merge' ? unique[0] : undefined,
       text: typeof item.text === 'string' ? item.text.trim() : undefined,
       reason: typeof item.reason === 'string' ? item.reason.trim() : undefined,
     });
@@ -658,7 +728,15 @@ export function renderCleanupReport(
     } else {
       lines.push(`${n}. delete ${proposal.ids[0] ?? `${proposal.ids.length} memories`}`);
     }
-    for (const id of proposal.ids) lines.push(`   - ${id}`);
+    for (const id of proposal.ids) {
+      const role =
+        proposal.op === 'merge'
+          ? id === proposal.into
+            ? '  (kept: most reinforced)'
+            : '  (deleted)'
+          : '';
+      lines.push(`   - ${id}${role}`);
+    }
     if (proposal.text) {
       const flat = proposal.text.replace(/\s+/g, ' ').trim();
       lines.push(`   + ${flat.length > 240 ? `${flat.slice(0, 239).trimEnd()}…` : flat}`);

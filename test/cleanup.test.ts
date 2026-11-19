@@ -21,6 +21,7 @@ import {
   type CleanupDeps,
   parseProposals,
   parseSelection,
+  rankKeepers,
   renderCorpus,
 } from '../src/cleanup.js';
 import type { ShodhClient } from '../src/client.js';
@@ -64,6 +65,11 @@ check(
 
 const defaults = parseProposals('{"op":"merge","ids":["a","b"],"text":"t"}');
 check('merge defaults into to the first id', defaults[0]?.into === 'a');
+const hinted = parseProposals('{"op":"merge","ids":["a","b"],"into":"b","text":"t"}');
+check(
+  "the model's into moves to the front, as the tie-break",
+  hinted[0]?.ids.join() === 'b,a' && hinted[0]?.into === 'b',
+);
 
 check(
   'merge without text is rejected',
@@ -136,6 +142,84 @@ check('an over-long memory is marked (cut)', long.corpus.includes('(cut)'));
 check('its tail is not in the corpus', !long.corpus.includes('TAIL-ONLY'));
 check('a cut memory is seen', long.seenIds.has('l1'));
 check('a cut memory is not merge-eligible', !long.fullIds.has('l1'));
+
+console.log('\n[cleanup] rankKeepers');
+
+const imp = (entries: [string, number][]) => new Map(entries);
+check(
+  'highest importance is kept',
+  rankKeepers(
+    ['a', 'b', 'c'],
+    imp([
+      ['a', 0.2],
+      ['b', 0.9],
+      ['c', 0.5],
+    ]),
+    new Map(),
+  )[0] === 'b',
+);
+check(
+  'importance beats access count',
+  rankKeepers(
+    ['a', 'b'],
+    imp([
+      ['a', 0.9],
+      ['b', 0.8],
+    ]),
+    imp([
+      ['a', 1],
+      ['b', 50],
+    ]),
+  )[0] === 'a',
+);
+check(
+  'equal importance: more accesses wins',
+  rankKeepers(
+    ['a', 'b'],
+    imp([
+      ['a', 0.5],
+      ['b', 0.5],
+    ]),
+    imp([
+      ['a', 2],
+      ['b', 9],
+    ]),
+  )[0] === 'b',
+);
+check(
+  'an unknown access count ranks below a known zero',
+  rankKeepers(
+    ['a', 'b'],
+    imp([
+      ['a', 0.5],
+      ['b', 0.5],
+    ]),
+    imp([['b', 0]]),
+  )[0] === 'b',
+);
+check(
+  'a full tie keeps the given order (the model hint first)',
+  rankKeepers(
+    ['b', 'a'],
+    imp([
+      ['a', 0.5],
+      ['b', 0.5],
+    ]),
+    new Map(),
+  )[0] === 'b',
+);
+check(
+  'the ranking covers every id, best first',
+  rankKeepers(
+    ['a', 'b', 'c'],
+    imp([
+      ['a', 0.1],
+      ['b', 0.3],
+      ['c', 0.2],
+    ]),
+    new Map(),
+  ).join() === 'b,c,a',
+);
 
 console.log('\n[cleanup] parseSelection');
 

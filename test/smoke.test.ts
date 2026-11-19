@@ -180,7 +180,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(404);
           return res.end(JSON.stringify({ error: 'not found' }));
         }
-        return res.end(JSON.stringify({ ...found, content: found.content, children_ids: [] }));
+        return res.end(JSON.stringify({ ...found, access_count: 7, children_ids: [] }));
       }
       if (req.method === 'PUT') return res.end(JSON.stringify({ ok: true }));
     }
@@ -247,10 +247,12 @@ class AgentsStub extends Service {
   }
 }
 
-// The canned analysis output: one JSONL merge (into the truncated c1) and one
-// JSONL delete, exactly in the shape the cleanup contract asks for.
+// The canned analysis output: one JSONL merge and one JSONL delete, in the
+// shape the cleanup contract asks for. The merge asks to keep c2 (importance
+// 0.8), but the plugin must keep c1 (importance 0.9): the model's `into` is a
+// tie-break, not the decision.
 const CANNED_LLM_LINES = [
-  '{"op":"merge","ids":["c1","c2"],"into":"c1","text":"Deploys target the staging host, per the release PR.","reason":"two memories state the same deploy target"}',
+  '{"op":"merge","ids":["c2","c1"],"into":"c2","text":"Deploys target the staging host, per the release PR.","reason":"two memories state the same deploy target"}',
   'garbage that must be skipped',
   '{"op":"delete","ids":["c3"],"reason":"superseded by the staging deploy decision"}',
   // Both of these must be filtered out of the report: c4 was cut in the corpus
@@ -887,6 +889,19 @@ check(
   cleanupOut.text.startsWith('shodh cleanup  dsh-alpha  4 memories scanned'),
 );
 check('report numbers the merge proposal', cleanupOut.text.includes('1. merge 2 memories → c1'));
+check(
+  'the most reinforced memory is kept, overriding the model pick',
+  cleanupOut.text.includes('- c1  (kept: most reinforced)') &&
+    cleanupOut.text.includes('- c2  (deleted)'),
+);
+check(
+  'access counts are read for both merge candidates in the tenant',
+  ['c1', 'c2'].every((id) =>
+    received
+      .slice(cleanupStart)
+      .some((r) => r.method === 'GET' && String(r.url) === `/api/memory/${id}?user_id=dsh-alpha`),
+  ),
+);
 check('report numbers the delete proposal', cleanupOut.text.includes('2. delete c3'));
 check('a merge naming a cut memory is dropped from the report', !cleanupOut.text.includes('→ c4'));
 check('a hallucinated id is dropped from the report', !cleanupOut.text.includes('ghost-1'));

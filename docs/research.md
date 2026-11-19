@@ -695,3 +695,11 @@ export function apply(ctx, config) {
 
 **Message shape caveat:** `MessageSourceMap['user']` admits `{kind:'user'}` exactly — custom `kind`s on user messages are for service-side producers only. The cleanup notice injected through `createUserMessage` uses the `plugin:shodh-memory` / `form:'notice'` shape (with `summary`), following the recall precedent; the smoke suite pins the wire behavior around it.
 
+
+**Reinforcement and forgetting (shodh `902daf8`, read from source):**
+
+- Each memory carries `importance` (0–1), `access_count`, `last_accessed`, and `activation` (`MemoryMetadata`, `src/memory/types.rs`). A recall bumps `access_count`; past 5 accesses each further recall multiplies `importance` by 1.1. Feedback adds +0.05 (helpful) or −10% (misleading, floor 0.05); background maintenance boosts frequently accessed memories.
+- `POST /api/memories` returns `importance` but not `access_count`; `GET /api/memory/{id}` returns both.
+- Nothing deletes memories automatically. Automatic decay applies to activation, graph edges (pruned when weak), and extracted facts. Removing memories by importance is an explicit call (`POST /api/forget/importance`), and even that only flags them as forgotten. "Forgetting" a memory means it ranks lower: recall scores are multiplied by `0.7 + 0.3 × importance`.
+- At write time, a new memory ≥0.95 cosine to an existing one is dropped to ~1% importance; similar older memories lose some importance. Paraphrases below 0.95 are not caught; that's the gap `/shodh cleanup` fills.
+- `PUT /api/memory/{id}` replaces only the content and embeddings: the id, `importance`, and `access_count` survive. Hence a merge keeps the most reinforced memory and rewrites it.
