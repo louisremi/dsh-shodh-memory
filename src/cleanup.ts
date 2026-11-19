@@ -62,9 +62,10 @@ interface RequestOptions {
 /** System prompt for the analysis. The output contract is JSONL, one proposal per line. */
 const SYSTEM_PROMPT = [
   'You maintain a long-term memory store for an AI coding harness. You receive the',
-  'stored memories as one line each: `id [Type NN%] #tags | text` (NN% is the',
-  'importance the server assigned; a `(truncated)` marker means the text was cut at',
-  '500 characters — be conservative about proposing merges of those).',
+  'stored memories as one line each: `id [Type NN%] #tags | text`, newest first',
+  '(NN% is the importance the server assigned). A `(truncated)` or `(cut)` marker',
+  'means you are NOT seeing the whole text: never include such a memory in a',
+  'merge (its unseen part would be lost); you may still propose deleting it.',
   '',
   'Propose the smallest set of edits that removes duplication and staleness:',
   '- "merge": two or more memories say (nearly) the same thing, or several belong',
@@ -85,10 +86,17 @@ const SYSTEM_PROMPT = [
   '{"op":"delete","ids":["id3"],"reason":"…"}',
 ].join('\n');
 
-/** Per-memory line cap inside the analysis input. The report shows more; this is the model's index view. */
-const LINE_CAP = 300;
+/**
+ * Per-memory cap inside the analysis input. A memory cut here is still shown
+ * (it can be proposed for deletion) but is marked `(cut)` and can never be
+ * part of a merge: the merge text would replace words the model never read.
+ */
+const LINE_CAP = 1200;
 
-/** Timeout code when the cleanup budget expires. */
+/** How long a report stays applicable. Past this the store has likely moved on. */
+export const CLEANUP_REPORT_TTL_MS = 30 * 60 * 1000;
+
+/** Abort reason when the cleanup budget expires. */
 const CLEANUP_TIMEOUT = new Error('shodh-memory: cleanup timed out');
 
 /**
@@ -114,41 +122,42 @@ export async function runCleanup(
   const route = await resolveRoute(llm, cfg);
   if (!route) return errorText('no LLM provider is registered, so cleanup cannot run.');
 
-  // ── inventory ──────────────────────────────────────────────────────────────
-  const { items, scanned, total } = await collectMemories(client, cfg, tenant);
-  if (items === null) {
-    return errorText(
-      'the shodh server does not expose the memory list endpoint (`POST /api/memories`); ' +
-        'the circuit may also be open. Check `/shodh status`, then retry.',
-    );
-  }
-  if (scanned === 0) {
-    return `Cleanup found nothing to analyze: tenant \`${tenant}\` has no memories.`;
-  }
-
-  // Full text for truncated items: one concurrent GET per item — the page we
-  // just fetched bounds the concurrency — and at most `maxFetches` items are
-  // upgraded, oldest-first, since the corpus drops oldest lines anyway.
-  const truncated = items
-    .filter((item) => item.truncated && item.id)
-    .slice(0, cfg.cleanup.maxFetches);
-  await Promise.all(truncated.map((item) => fillOne(client, item)));
-
-  // ── one-shot LLM pass ──────────────────────────────────────────────────────
-  const { corpus, dropped } = renderCorpus(items, cfg.cleanup.maxInputBytes);
+  // One budget for the whole pass: listing, full-text fetches, and the model.
   const deadline = newDeadline(signal, cfg.cleanup.timeoutMs);
   try {
+    // ── inventory ────────────────────────────────────────────────────────────
+    const { items, scanned, total } = await collectMemories(client, cfg, tenant, deadline.signal);
+    if (items === null) {
+      return errorText(
+        'the shodh server does not expose the memory list endpoint (`POST /api/memories`); ' +
+          'the circuit may also be open. Check `/shodh status`, then retry.',
+      );
+    }
+    if (scanned === 0) {
+      return `Cleanup found nothing to analyze: tenant \`${tenant}\` has no memories.`;
+    }
+
+    // Full text for truncated previews, newest first (the corpus keeps the
+    // newest, so those are the fetches that matter). One concurrent GET per
+    // item, at most `maxFetches`. Any item left truncated stays merge-ineligible.
+    const truncated = items
+      .filter((item) => item.truncated && item.id)
+      .slice(0, cfg.cleanup.maxFetches);
+    await Promise.all(truncated.map((item) => fillOne(client, item, tenant, deadline.signal)));
+
+    // ── one-shot LLM pass ────────────────────────────────────────────────────
+    const { corpus, dropped, seenIds, fullIds } = renderCorpus(items, cfg.cleanup.maxInputBytes);
     const text = await askLlm(deps, route, corpus, deadline.signal);
-    const proposals = parseProposals(text).filter(
-      (p) => p.ids.length > 0 && p.ids.every((id) => items.some((m) => m.id === id)),
-    );
+    const proposals = parseProposals(text).filter((p) => proposalAllowed(p, seenIds, fullIds));
     const report: CleanupReport = {
       tenant,
       proposals,
-      knownIds: new Set(items.map((m) => m.id)),
+      seenIds,
+      fullIds,
       created: Date.now(),
+      applied: new Set(),
     };
-    deps.state.cleanupProposals = report;
+    deps.state.cleanupReports.set(tenant, report);
     return renderCleanupReport(report, { scanned, total, dropped });
   } catch (reason) {
     const message =
@@ -162,96 +171,162 @@ export async function runCleanup(
 }
 
 /**
- * Execute selected proposals from the last report. Human-confirmed only.
+ * Execute selected proposals from this tenant's last report. Human-confirmed only.
  *
  * @param deps - the same injected dependencies as {@link runCleanup}.
+ * @param tenant - the caller's resolved tenant; only its own report is applied.
  * @param spec - `all`, or a comma-separated list of proposal numbers.
  * @param signal - caller cancellation, when the harness provides one.
  * @returns one result line per executed operation, plus a summary.
  */
 export async function applyCleanup(
   deps: CleanupDeps,
+  tenant: string,
   spec: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const report = deps.state.cleanupProposals;
+  const report = deps.state.cleanupReports.get(tenant);
   if (!report || report.proposals.length === 0) {
-    return errorText('nothing to apply: run `/shodh cleanup` first to get a proposal report.');
+    return errorText(
+      `nothing to apply for tenant \`${tenant}\`: run \`/shodh cleanup\` first to get a proposal report.`,
+    );
   }
-  const picked =
-    spec.toLowerCase() === 'all'
-      ? report.proposals.map((_, i) => i)
-      : spec
-          .split(',')
-          .map((part) => Number(part.trim()) - 1)
-          .filter((n) => Number.isInteger(n) && n >= 0 && n < report.proposals.length);
-  if (picked.length === 0) {
-    return errorText('Usage: `/shodh cleanup apply <n,n,…>` (or `all`) — after `/shodh cleanup`.');
+  if (Date.now() - report.created > CLEANUP_REPORT_TTL_MS) {
+    deps.state.cleanupReports.delete(tenant);
+    return errorText(
+      `the last report is older than ${CLEANUP_REPORT_TTL_MS / 60_000} minutes and the store ` +
+        'may have changed since. Run `/shodh cleanup` again.',
+    );
   }
+  const selection = parseSelection(spec, report.proposals.length);
+  if ('error' in selection) return errorText(selection.error);
 
-  const options = { userId: report.tenant, timeoutMs: 8000 };
-  const lines: string[] = [];
+  const pending = selection.indexes.filter((index) => !report.applied.has(index));
+  const already = selection.indexes.filter((index) => report.applied.has(index));
+
+  // One budget for the whole apply, like the analysis pass.
+  const deadline = newDeadline(signal, deps.cfg.cleanup.timeoutMs);
+  const options = { userId: tenant, timeoutMs: 8000, signal: deadline.signal };
+  const lines: string[] = already.map((index) => `#${index + 1} already applied — skipped`);
   let done = 0;
   let failed = 0;
 
-  for (const index of [...new Set(picked)].sort((a, b) => a - b)) {
-    if (signal?.aborted) {
-      lines.push(`cancelled — ${picked.length - lines.length} proposal(s) not attempted`);
-      break;
-    }
-    const proposal = report.proposals[index];
-    // The report was built from ids we fetched, but a report is long-lived state
-    // and nothing else may mint entries into it: unknown ids are refused.
-    const unknown = proposal.ids.filter((id) => !report.knownIds.has(id));
-    if (unknown.length > 0) {
-      failed += 1;
-      lines.push(`#${index + 1} skipped — unknown id(s): ${unknown.join(', ')}`);
-      continue;
-    }
-
-    try {
-      if (proposal.op === 'merge' && proposal.into && proposal.text) {
-        await deps.client.updateMemory(proposal.into, proposal.text, options);
-        lines.push(`#${index + 1} merged ${proposal.ids.length} → ${proposal.into}`);
-      } else if (proposal.op === 'merge' && proposal.text) {
-        const created = await deps.client.remember(
-          { content: proposal.text, memoryType: 'Decision' },
-          options,
-        );
-        const keepId = typeof created?.id === 'string' ? created.id : undefined;
-        lines.push(
-          `#${index + 1} merged ${proposal.ids.length} → new${keepId ? ` ${keepId}` : ''}`,
-        );
-        proposal.into = keepId;
-      } else {
-        lines.push(`#${index + 1} deleted ${proposal.ids.length}`);
+  try {
+    for (const [position, index] of pending.entries()) {
+      if (deadline.signal.aborted) {
+        const reason = deadline.signal.reason === CLEANUP_TIMEOUT ? 'timed out' : 'cancelled';
+        lines.push(`${reason} — ${pending.length - position} proposal(s) not attempted`);
+        break;
       }
-      const rest = proposal.ids.filter((id) => id !== proposal.into);
-      const forgotten: string[] = [];
-      const missed: string[] = [];
-      for (const id of rest) {
-        if (await forgetQuiet(deps.client, id, options)) forgotten.push(id);
-        else missed.push(id);
-      }
-      if (forgotten.length > 0) lines.push(`     forgot ${forgotten.join(', ')}`);
-      if (missed.length > 0) {
+      const proposal = report.proposals[index];
+      // Re-check against the report's own record of what the model saw. The
+      // report is long-lived state; nothing may mint entries into it.
+      if (!proposalAllowed(proposal, report.seenIds, report.fullIds)) {
         failed += 1;
-        lines.push(
-          `     WARNING could not delete ${missed.join(', ')} — ` +
-            (proposal.op === 'merge'
-              ? 'the consolidated copy coexists with these originals'
-              : 'this memory is still in the store'),
-        );
+        lines.push(`#${index + 1} skipped — names memories the analysis did not see in full`);
+        continue;
       }
-      done += 1;
-    } catch (error) {
-      failed += 1;
-      lines.push(`#${index + 1} failed — ${describeError(error)}`);
+
+      try {
+        if (proposal.op === 'merge' && proposal.into && proposal.text) {
+          await deps.client.updateMemory(proposal.into, proposal.text, options);
+          lines.push(`#${index + 1} merged ${proposal.ids.length} → ${proposal.into}`);
+        } else {
+          lines.push(`#${index + 1} deleted ${proposal.ids.length}`);
+        }
+        const rest = proposal.ids.filter((id) => id !== proposal.into);
+        const forgotten: string[] = [];
+        const missed: string[] = [];
+        for (const id of rest) {
+          if (await forgetQuiet(deps.client, id, options)) forgotten.push(id);
+          else missed.push(id);
+        }
+        if (forgotten.length > 0) lines.push(`     forgot ${forgotten.join(', ')}`);
+        if (missed.length > 0) {
+          // Left retryable on purpose: re-applying re-sends the same rewrite
+          // (harmless) and retries only what is still there.
+          failed += 1;
+          lines.push(
+            `     WARNING could not delete ${missed.join(', ')} — ` +
+              (proposal.op === 'merge'
+                ? 'the consolidated copy coexists with these originals'
+                : 'this memory is still in the store') +
+              `; \`/shodh cleanup apply ${index + 1}\` retries it`,
+          );
+        } else {
+          // Fully done: re-applying it later is a no-op.
+          report.applied.add(index);
+        }
+        done += 1;
+      } catch (error) {
+        if (deadline.signal.aborted) {
+          const reason = deadline.signal.reason === CLEANUP_TIMEOUT ? 'timed out' : 'cancelled';
+          lines.push(
+            `#${index + 1} ${reason} mid-way — check it with /shodh search; ` +
+              `${pending.length - position - 1} proposal(s) not attempted`,
+          );
+          failed += 1;
+          break;
+        }
+        failed += 1;
+        lines.push(`#${index + 1} failed — ${describeError(error)}`);
+      }
     }
+  } finally {
+    deadline.dispose();
   }
 
   lines.unshift(`Applied ${done} proposal(s), ${failed} problem(s):`);
   return lines.join('\n');
+}
+
+/**
+ * Parse an apply selection. Strict: every token must be a proposal number in
+ * range, so a typo can never silently apply a different subset.
+ * @param spec - `all`, or comma/space-separated 1-based numbers.
+ * @param count - how many proposals the report holds.
+ * @returns zero-based indexes in ascending order, or an error sentence.
+ */
+export function parseSelection(
+  spec: string,
+  count: number,
+): { indexes: number[] } | { error: string } {
+  const trimmed = spec.trim();
+  if (trimmed.toLowerCase() === 'all') {
+    return { indexes: Array.from({ length: count }, (_, i) => i) };
+  }
+  const tokens = trimmed.split(/[\s,]+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return { error: 'say which proposals: `/shodh cleanup apply <n,n,…>` (or `all`).' };
+  }
+  const bad = tokens.filter((t) => !/^\d+$/.test(t) || Number(t) < 1 || Number(t) > count);
+  if (bad.length > 0) {
+    return {
+      error:
+        `not a proposal number: ${bad.join(', ')}. The last report has ${count} ` +
+        `proposal(s); use 1–${count}, or \`all\`. Nothing was applied.`,
+    };
+  }
+  return { indexes: [...new Set(tokens.map((t) => Number(t) - 1))].sort((a, b) => a - b) };
+}
+
+/**
+ * Whether a proposal may be executed: a delete needs every id to have been in
+ * the analysis input; a merge needs every id's *whole* text there, because it
+ * rewrites one and deletes the rest.
+ */
+function proposalAllowed(
+  proposal: CleanupProposal,
+  seenIds: Set<string>,
+  fullIds: Set<string>,
+): boolean {
+  if (proposal.ids.length === 0) return false;
+  if (proposal.op === 'merge') {
+    const { into, text } = proposal;
+    if (!into || !text || !proposal.ids.includes(into)) return false;
+  }
+  const allowed = proposal.op === 'merge' ? fullIds : seenIds;
+  return proposal.ids.every((id) => allowed.has(id));
 }
 
 // ── inventory ────────────────────────────────────────────────────────────────
@@ -265,10 +340,11 @@ async function collectMemories(
   client: ShodhClient,
   cfg: ShodhConfig,
   tenant: string,
+  signal: AbortSignal,
 ): Promise<{ items: ListMemoryItem[] | null; scanned: number; total: number }> {
   const cap = cfg.cleanup.maxMemories;
   const pageSize = Math.min(cap, 100);
-  const options = { userId: tenant, timeoutMs: 10000 };
+  const options = { userId: tenant, timeoutMs: 10000, signal };
   const items: ListMemoryItem[] = [];
   let total = 0;
 
@@ -278,6 +354,8 @@ async function collectMemories(
     try {
       response = await client.listMemories({ limit, offset }, options);
     } catch (error) {
+      // Our own deadline or the caller: let runCleanup report it as such.
+      if (signal.aborted) throw error;
       // A 404/405 is not an outage: the deployed server simply predates the
       // list endpoint, and paging on would just repeat the same rejection.
       const status = (error as { status?: number }).status;
@@ -334,11 +412,23 @@ function normalizeListItem(raw: unknown): ListMemoryItem {
   };
 }
 
-/** Replace one truncated preview with its full text; any failure keeps the preview. */
-async function fillOne(client: ShodhClient, item: ListMemoryItem): Promise<void> {
+/**
+ * Replace one truncated preview with its full text, read from the analyzed
+ * tenant's store. A failed fetch keeps the preview (and the item stays
+ * merge-ineligible); running out of budget aborts the whole pass.
+ */
+async function fillOne(
+  client: ShodhClient,
+  item: ListMemoryItem,
+  tenant: string,
+  signal: AbortSignal,
+): Promise<void> {
   const full = await client
-    .getMemory(item.id, { userId: client.userId, timeoutMs: 5000 })
-    .catch(() => undefined);
+    .getMemory(item.id, { userId: tenant, timeoutMs: 5000, signal })
+    .catch((error: unknown) => {
+      if (signal.aborted) throw error;
+      return undefined;
+    });
   const content = full && typeof full.content === 'string' ? full.content : undefined;
   if (content) {
     item.content = content;
@@ -362,33 +452,52 @@ async function resolveRoute(
   return modelId === undefined ? undefined : { provider: first.id, model: modelId };
 }
 
-/**
- * The analysis input: one capped line per memory, oldest dropped first until
- * the byte budget fits (newest memories are the most relevant to prune).
- */
-export function renderCorpus(
-  items: ListMemoryItem[],
-  maxInputBytes: number,
-): { corpus: string; dropped: number } {
-  const lines = items.map((m) => {
-    const flat = m.content.replace(/\s+/g, ' ').trim();
-    const body = flat.length > LINE_CAP ? `${flat.slice(0, LINE_CAP - 1).trimEnd()}…` : flat;
-    const tags = m.tags.length > 0 ? ` #${m.tags.join(' #')}` : '';
-    const cut = m.truncated ? ' (truncated)' : '';
-    return `${m.id} [${m.type} ${Math.round(Math.min(1, Math.max(0, m.importance)) * 100)}%]${tags}${cut} | ${body}`;
-  });
+/** What {@link renderCorpus} produced, and exactly what the model will have seen. */
+export interface Corpus {
+  /** The analysis input, newest memory first. */
+  corpus: string;
+  /** How many of the oldest memories did not fit the byte budget. */
+  dropped: number;
+  /** Ids present in the corpus (a delete may name these). */
+  seenIds: Set<string>;
+  /** Ids present with their whole text (a merge may only name these). */
+  fullIds: Set<string>;
+}
 
-  let dropped = 0;
-  // `Buffer.byteLength` is exactly what the API charges for; join cost is the
-  // newlines, recomputed cheaply as length of the joined body + (count - 1).
-  for (;;) {
-    const kept = lines.slice(dropped);
-    const bytes = kept.reduce((sum, line) => sum + Buffer.byteLength(line, 'utf8') + 1, -1);
-    if (bytes <= maxInputBytes || kept.length <= 1) {
-      return { corpus: kept.join('\n'), dropped };
-    }
-    dropped += 1;
+/**
+ * The analysis input: one line per memory, newest first. Lines over
+ * {@link LINE_CAP} are cut and marked `(cut)`; server previews that were never
+ * filled are marked `(truncated)`. Lines are taken newest-first until the byte
+ * budget is spent, so it is the *oldest* memories that fall off.
+ * @param items - memories, newest first (the list endpoint's order).
+ * @param maxInputBytes - UTF-8 budget for the joined corpus.
+ */
+export function renderCorpus(items: ListMemoryItem[], maxInputBytes: number): Corpus {
+  const kept: string[] = [];
+  const seenIds = new Set<string>();
+  const fullIds = new Set<string>();
+  let bytes = 0;
+
+  for (const m of items) {
+    const flat = m.content.replace(/\s+/g, ' ').trim();
+    const cut = flat.length > LINE_CAP;
+    const body = cut ? `${flat.slice(0, LINE_CAP - 1).trimEnd()}…` : flat;
+    const tags = m.tags.length > 0 ? ` #${m.tags.join(' #')}` : '';
+    const marker = m.truncated ? ' (truncated)' : cut ? ' (cut)' : '';
+    const importance = Math.round(Math.min(1, Math.max(0, m.importance)) * 100);
+    const line = `${m.id} [${m.type} ${importance}%]${tags}${marker} | ${body}`;
+
+    // Each line after the first also pays for its joining newline. The first
+    // line always goes in, so a tiny budget still analyzes something.
+    const cost = Buffer.byteLength(line, 'utf8') + (kept.length > 0 ? 1 : 0);
+    if (kept.length > 0 && bytes + cost > maxInputBytes) break;
+    kept.push(line);
+    bytes += cost;
+    seenIds.add(m.id);
+    if (!m.truncated && !cut) fullIds.add(m.id);
   }
+
+  return { corpus: kept.join('\n'), dropped: items.length - kept.length, seenIds, fullIds };
 }
 
 /**
@@ -527,11 +636,13 @@ export function renderCleanupReport(
   scope: { scanned: number; total: number; dropped: number },
 ): string {
   const lines: string[] = [cleanupReportHeader(report, scope.scanned), '─'.repeat(44)];
-  if (scope.scanned < scope.total) {
-    lines.push(
-      `scope     ${scope.scanned}/${scope.total} newest scanned` +
-        (scope.dropped > 0 ? ` · ${scope.dropped} over the input budget` : ''),
-    );
+  if (scope.scanned < scope.total || scope.dropped > 0) {
+    const parts: string[] = [];
+    if (scope.scanned < scope.total) parts.push(`${scope.scanned}/${scope.total} newest scanned`);
+    if (scope.dropped > 0) {
+      parts.push(`${scope.dropped} oldest over the input budget, not analyzed`);
+    }
+    lines.push(`scope     ${parts.join(' · ')}`);
   }
   lines.push('');
 

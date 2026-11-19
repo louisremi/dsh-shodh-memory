@@ -70,10 +70,13 @@
 #                   newest-first and drops the oldest lines when the input
 #                   budget is tighter than the scan.
 #   maxFetches      cap on per-memory GETs used to replace truncated list
-#                   previews with full text (0 = analyze previews as-is).
+#                   previews with full text, newest first. 0 = analyze the
+#                   previews as-is; a memory left truncated can still be
+#                   proposed for deletion but never merged.
 #   maxInputBytes   hard budget for the corpus sent to the model.
 #   maxOutputTokens   the model's output cap; proposals are short JSONL.
-#   timeoutMs       wall-clock budget for the whole pass, fetches included.
+#   timeoutMs       wall-clock budget for the whole pass (list, fetches, model),
+#                   and separately for each `apply`.
 #   provider/model  pin a route; unset uses the profile's first registered
 #                   provider and its first model.
 #

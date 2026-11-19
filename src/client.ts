@@ -148,8 +148,9 @@ export class ShodhClient {
   async call<T = JsonRecord>(
     path: string,
     body?: JsonRecord,
-    { method = 'POST', timeoutMs }: CallOptions = {},
+    { method = 'POST', timeoutMs, signal }: CallOptions = {},
   ): Promise<T> {
+    signal?.throwIfAborted();
     if (this.breakerOpen) {
       throw new ShodhError(
         `shodh-memory circuit open (retry in ${Math.ceil((this.openUntil - Date.now()) / 1000)}s)`,
@@ -160,6 +161,8 @@ export class ShodhClient {
     const budget = timeoutMs ?? this.requestTimeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
+    const onCallerAbort = () => controller.abort();
+    signal?.addEventListener('abort', onCallerAbort, { once: true });
 
     try {
       const headers: Record<string, string> = { Accept: 'application/json' };
@@ -198,6 +201,9 @@ export class ShodhClient {
         );
       }
     } catch (error) {
+      // The caller gave up: not evidence about the server, so the breaker
+      // must not hear about it. Surface the caller's own reason.
+      if (signal?.aborted) throw signal.reason;
       if (error instanceof ShodhError) {
         this.recordFailure(error);
         throw error;
@@ -210,6 +216,7 @@ export class ShodhClient {
       throw wrapped;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onCallerAbort);
     }
   }
 
@@ -231,6 +238,8 @@ export class ShodhClient {
     try {
       return await this.call<T>(path, body, options);
     } catch (error) {
+      // Cancellation is the caller's own decision, never an "uninteresting failure".
+      if (options?.signal?.aborted) throw error;
       const err = error as { message?: unknown };
       this.logger?.debug?.(`[shodh-memory] ${String(err?.message ?? error)}`);
       return undefined;

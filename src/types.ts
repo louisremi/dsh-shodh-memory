@@ -387,11 +387,11 @@ export interface PluginState {
   injectedTurns: Map<string, Map<string, number>>;
   activity: ActivityCounters;
   /**
-   * The last `/shodh cleanup` report, held for `cleanup apply`. Nothing is
-   * applied without that second human command, and apply only accepts ids this
-   * report actually proposed.
+   * The last `/shodh cleanup` report per tenant, held for `cleanup apply`.
+   * Keyed by tenant so one workspace can never apply another's proposals.
+   * Nothing is applied without that second human command.
    */
-  cleanupProposals?: CleanupReport;
+  cleanupReports: Map<string, CleanupReport>;
 }
 
 /** One LLM-proposed memory-store edit. Never executed without `/shodh cleanup apply`. */
@@ -408,13 +408,26 @@ export interface CleanupProposal {
   reason?: string;
 }
 
-/** One `/shodh cleanup` run, retained until the next run replaces it. */
+/**
+ * One `/shodh cleanup` run, held until it is applied, expires, or the next run
+ * replaces it. Every field is checked again at apply time.
+ */
 export interface CleanupReport {
+  /** The tenant analyzed. Apply refuses to run under any other tenant. */
   tenant: string;
   proposals: CleanupProposal[];
-  /** Ids of every memory the analysis actually saw; apply validates against this. */
-  knownIds: Set<string>;
+  /** Ids that made it into the analysis input (possibly cut). A delete needs these. */
+  seenIds: Set<string>;
+  /**
+   * Ids whose whole text was in the analysis input. A merge rewrites or deletes
+   * every id it names, so all of them must be here — otherwise text the model
+   * never saw would be lost.
+   */
+  fullIds: Set<string>;
+  /** Epoch ms; apply refuses a report past the cleanup report TTL. */
   created: number;
+  /** Proposal indexes already executed; re-applying them is a no-op. */
+  applied: Set<number>;
 }
 
 /** A memory rendered for display, normalized by format.ts. */
@@ -441,4 +454,9 @@ export interface CallOptions {
   timeoutMs?: number;
   /** Tenant override; wins over the client's default user id. */
   userId?: string;
+  /**
+   * Caller cancellation. Aborting it cancels the request; it is the caller's
+   * decision, not a server failure, so it never counts against the breaker.
+   */
+  signal?: AbortSignal;
 }

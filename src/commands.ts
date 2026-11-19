@@ -359,7 +359,7 @@ async function cleanupResult(
   const text =
     kind === 'run'
       ? await runCleanup(cleanupDeps, userId, invocation.signal)
-      : await applyCleanup(cleanupDeps, inputAfterApply(invocation), invocation.signal);
+      : await applyCleanup(cleanupDeps, userId, inputAfterApply(invocation), invocation.signal);
   const failed = text.startsWith('Cleanup unavailable:');
   return { kind: failed ? 'error' : 'success', text };
 }

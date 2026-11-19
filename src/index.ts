@@ -158,6 +158,7 @@ export function apply(ctx: ShodhContext, config: unknown): void {
   const state: PluginState = {
     capturedHashes: new Set<string>(),
     injectedTurns: new Map<string, Map<string, number>>(),
+    cleanupReports: new Map(),
     // Session activity counters, surfaced by `/shodh status`. These are
     // process-lifetime tallies (reset on reload), not persisted history — they
     // answer "what has this running plugin actually done", which is what makes

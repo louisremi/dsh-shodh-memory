@@ -140,6 +140,20 @@ you chose. It is opt-on-demand: no scheduler, no standing cost, no background
 calls. If the profile has no LLM provider registered, cleanup says so and
 changes nothing.
 
+Apply only trusts what the analysis actually showed the model:
+
+- **No merge over unseen text.** A merge rewrites one memory and deletes the
+  others, so every memory it names must have reached the model whole. A
+  memory still truncated, or cut at the 1,200-char line cap, can be proposed
+  for deletion but never merged.
+- **Your tenant, your report.** Reports are kept per tenant; another
+  workspace cannot apply yours. A report expires after 30 minutes, and a
+  proposal already applied is skipped if you apply again.
+- **Strict numbers.** `apply 1,x` is refused outright rather than quietly
+  applying `1`.
+- **One budget.** `timeoutMs` bounds the whole pass — listing, full-text
+  fetches, and the model — and, separately, each apply.
+
 ### `/shodh` slash command
 
 Human-facing control that costs the model nothing:

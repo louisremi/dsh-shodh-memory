@@ -15,8 +15,17 @@
  */
 
 import assert from 'node:assert/strict';
-import { parseProposals, renderCorpus } from '../src/cleanup.js';
-import type { ListMemoryItem } from '../src/types.js';
+import {
+  applyCleanup,
+  CLEANUP_REPORT_TTL_MS,
+  type CleanupDeps,
+  parseProposals,
+  parseSelection,
+  renderCorpus,
+} from '../src/cleanup.js';
+import type { ShodhClient } from '../src/client.js';
+import { normalizeConfig } from '../src/config.js';
+import type { CleanupReport, ListMemoryItem, PluginState } from '../src/types.js';
 
 let passed = 0;
 function check(label: string, condition: unknown): void {
@@ -88,33 +97,147 @@ const corpus = renderCorpus(
   100_000,
 );
 check('no lines dropped under budget', corpus.dropped === 0);
-check(
-  'ids lead their lines',
-  /^n1\b/m.test(`\n${corpus.corpus}`) && corpus.corpus.startsWith('n1 '),
-);
+check('ids lead their lines', corpus.corpus.startsWith('n1 '));
 check('newest stays first', corpus.corpus.indexOf('n1') < corpus.corpus.indexOf('n2'));
 check('truncation is marked for the model', corpus.corpus.includes('(truncated)'));
 check('importance is rendered as a percentage', corpus.corpus.includes('[Decision 50%]'));
 check('tags are rendered', corpus.corpus.includes('#t'));
+check('both memories were seen', corpus.seenIds.has('n1') && corpus.seenIds.has('n2'));
+check('a whole memory is merge-eligible', corpus.fullIds.has('n1'));
+check('an unfilled server preview is not merge-eligible', !corpus.fullIds.has('n2'));
 
+// The list endpoint returns newest first: m0 is the NEWEST here.
 const fat = Array.from({ length: 6 }, (_, i) =>
   item(`m${i}`, `memory number ${i} ${'x'.repeat(400)}`),
 );
 const capped = renderCorpus(fat, 900);
 check('oversized scans drop lines', capped.dropped > 0);
 check(
-  'the oldest memories are the ones dropped',
-  !capped.corpus.includes('m0 ') && capped.corpus.includes('m5 '),
+  'the newest memories are kept, the oldest dropped',
+  capped.corpus.startsWith('m0 ') && !capped.corpus.includes('m5 '),
+);
+check('the corpus respects the byte budget', Buffer.byteLength(capped.corpus, 'utf8') <= 900);
+check(
+  'dropped memories are neither seen nor merge-eligible',
+  !capped.seenIds.has('m5') && !capped.fullIds.has('m5'),
 );
 check(
-  'the corpus respects the byte budget',
-  Buffer.byteLength(capped.corpus, 'utf8') <= 900 || capped.dropped === fat.length - 1,
+  'the drop count matches what is missing',
+  capped.dropped === fat.length - capped.seenIds.size,
+);
+
+const lone = renderCorpus([item('big', 'y'.repeat(800))], 10);
+check('the first line always goes in, even over budget', lone.seenIds.has('big'));
+
+// LINE_CAP: an over-long memory is still shown (deletable) but marked cut,
+// and it can never be merged — its tail never reached the model.
+const long = renderCorpus([item('l1', `${'word '.repeat(400)}TAIL-ONLY`)], 100_000);
+check('an over-long memory is marked (cut)', long.corpus.includes('(cut)'));
+check('its tail is not in the corpus', !long.corpus.includes('TAIL-ONLY'));
+check('a cut memory is seen', long.seenIds.has('l1'));
+check('a cut memory is not merge-eligible', !long.fullIds.has('l1'));
+
+console.log('\n[cleanup] parseSelection');
+
+const sel = (spec: string, count = 3) => parseSelection(spec, count);
+const indexes = (spec: string, count = 3) => {
+  const result = sel(spec, count);
+  return 'indexes' in result ? result.indexes.join() : `error:${result.error}`;
+};
+check('all selects every proposal', indexes('all') === '0,1,2');
+check('ALL is case-insensitive', indexes('ALL') === '0,1,2');
+check('commas and spaces both separate', indexes('3, 1 2') === '0,1,2');
+check('duplicates collapse', indexes('2,2') === '1');
+check('a non-number is refused, not ignored', indexes('1,x').startsWith('error:'));
+check('zero is refused', indexes('0').startsWith('error:'));
+check('out of range is refused', indexes('4').startsWith('error:'));
+check('a fraction is refused', indexes('1.5').startsWith('error:'));
+check('a negative is refused', indexes('-1').startsWith('error:'));
+check('an empty selection is refused', indexes('').startsWith('error:'));
+check(
+  'the refusal names the bad token and says nothing was applied',
+  indexes('1,x').includes('x') && indexes('1,x').includes('Nothing was applied'),
 );
 
 const flat = renderCorpus([item('w1', 'line one\nline two   folded')], 100_000);
 check(
   'newlines are folded for the one-line index',
   flat.corpus.includes('line one line two folded'),
+);
+
+console.log('\n[cleanup] applyCleanup re-checks a stored report');
+
+// A report is long-lived state. These tamper with one directly, as if
+// something had minted entries into it, and assert that apply still refuses
+// every write the analysis did not justify.
+const writes: string[] = [];
+const fakeClient = {
+  updateMemory: async (id: string) => {
+    writes.push(`PUT ${id}`);
+    return {};
+  },
+  soft: async (path: string, _body: unknown, options: { method?: string }) => {
+    writes.push(`${options.method} ${path}`);
+    return {};
+  },
+} as unknown as ShodhClient;
+const state = {
+  capturedHashes: new Set<string>(),
+  injectedTurns: new Map(),
+  activity: {} as PluginState['activity'],
+  cleanupReports: new Map(),
+} as PluginState;
+const deps: CleanupDeps = {
+  ctx: {} as CleanupDeps['ctx'],
+  client: fakeClient,
+  cfg: normalizeConfig({}),
+  state,
+};
+const tamper = (proposals: CleanupReport['proposals']): void => {
+  state.cleanupReports.set('t', {
+    tenant: 't',
+    proposals,
+    seenIds: new Set(['seen', 'whole', 'whole2']),
+    fullIds: new Set(['whole', 'whole2']),
+    created: Date.now(),
+    applied: new Set(),
+  });
+};
+
+tamper([{ op: 'delete', ids: ['never-seen'] }]);
+let out = await applyCleanup(deps, 't', 'all');
+check('a delete of an id the model never saw is refused', out.includes('#1 skipped'));
+check('…with no write', writes.length === 0);
+
+tamper([{ op: 'merge', ids: ['whole', 'seen'], into: 'whole', text: 'x' }]);
+out = await applyCleanup(deps, 't', 'all');
+check('a merge naming a cut/truncated memory is refused', out.includes('#1 skipped'));
+check('…with no write', writes.length === 0);
+
+tamper([{ op: 'merge', ids: ['whole', 'whole2'], into: 'elsewhere', text: 'x' }]);
+out = await applyCleanup(deps, 't', 'all');
+check('a merge whose target is outside its ids is refused', out.includes('#1 skipped'));
+check('…with no write', writes.length === 0);
+
+tamper([{ op: 'delete', ids: ['seen'] }]);
+out = await applyCleanup(deps, 'someone-else', 'all');
+check("another tenant's report is invisible", out.includes('nothing to apply'));
+check('…with no write', writes.length === 0);
+
+tamper([{ op: 'delete', ids: ['seen'] }]);
+const stale = state.cleanupReports.get('t');
+if (stale) stale.created = Date.now() - CLEANUP_REPORT_TTL_MS - 1;
+out = await applyCleanup(deps, 't', 'all');
+check('an expired report is refused', out.includes('older than'));
+check('…with no write', writes.length === 0);
+check('…and dropped', !state.cleanupReports.has('t'));
+
+tamper([{ op: 'delete', ids: ['seen'] }]);
+out = await applyCleanup(deps, 't', 'all');
+check('a legitimate delete goes through', out.includes('#1 deleted 1'));
+check(
+  '…as exactly one DELETE in the report tenant',
+  writes.join() === 'DELETE /api/memory/seen?user_id=t',
 );
 
 console.log(`\n${passed} cleanup unit checks passed.\n`);
